@@ -31,6 +31,7 @@ import {
   Bell,
   Building2,
   Check,
+  Clock,
   Copy,
   CreditCard,
   Droplet,
@@ -45,7 +46,10 @@ import {
   Menu,
   Pill,
   Printer,
+  RefreshCw,
   Search,
+  ShieldAlert,
+  Siren,
   Stethoscope,
   User,
   UserPlus,
@@ -96,6 +100,7 @@ import { PrintFooter, PrintLetterhead } from './components/PrintHeaderFooter';
 import { ModuleRecordsToolbar } from './components/ModuleRecordsToolbar';
 import { PrintPreviewModal } from './components/PrintPreviewModal';
 import { OverviewDashboard } from './components/modules/OverviewDashboard';
+import { EmergencyDashboard } from './components/modules/EmergencyDashboard';
 import { PopulationHealthModule } from './components/modules/PopulationHealthModule';
 import { ScreeningCareLoopModule } from './components/modules/ScreeningCareLoopModule';
 import { PatientsClinicalModule } from './components/modules/PatientsClinicalModule';
@@ -223,6 +228,8 @@ export default function App() {
   const [registerDepartment, setRegisterDepartment] = useState('Outpatient');
 
   const [activeModule, setActiveModule] = useState<ModuleKey>('overview');
+  const [emergencyMode, setEmergencyMode] = useState(false);
+  const [refreshingApproval, setRefreshingApproval] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
   const [focusedPatientId, setFocusedPatientId] = useState<string | null>(null);
@@ -326,14 +333,22 @@ export default function App() {
 
         if (snap.exists()) {
           const existingProfile = snap.data() as UserProfile;
-          if (
-            pending?.facilityId &&
-            (pending.facilityId !== existingProfile.facilityId ||
-              (pending.facilityName && pending.facilityName !== existingProfile.facilityName))
-          ) {
+          const isBootAdmin = fbUser.email === BOOTSTRAPPED_ADMIN_EMAIL && fbUser.emailVerified;
+          const facilityChanged =
+            Boolean(pending?.facilityId) && pending?.facilityId !== existingProfile.facilityId;
+          const facilityNameChanged =
+            Boolean(pending?.facilityName) && pending?.facilityName !== existingProfile.facilityName;
+
+          if (pending?.facilityId && (facilityChanged || facilityNameChanged)) {
+            const nextStatus: UserProfile['status'] = isBootAdmin
+              ? 'Active'
+              : facilityChanged
+                ? 'Pending'
+                : existingProfile.status;
             const updatedFields = {
               facilityId: clampStr(pending.facilityId, 128),
               facilityName: clampStr(pending.facilityName || pending.facilityId, 160),
+              status: nextStatus,
               updatedAt: now,
             };
             await safeUpdateDoc('users', fbUser.uid, updatedFields);
@@ -359,7 +374,7 @@ export default function App() {
               pending?.department || (isBootAdmin ? 'Central Platform Governance' : 'Clinical Operations'),
               100
             ),
-            status: 'Active',
+            status: isBootAdmin ? 'Active' : 'Pending',
             createdAt: now,
             updatedAt: now,
           };
@@ -376,6 +391,23 @@ export default function App() {
 
     return () => unsub();
   }, []);
+
+  // Keep current user's own approval status & role synchronized in real time
+  useEffect(() => {
+    if (!authReady || !firebaseUser) return;
+    const unsub = onSnapshot(
+      doc(db, 'users', firebaseUser.uid),
+      (snap) => {
+        if (snap.exists()) {
+          setUserProfile(snap.data() as UserProfile);
+        }
+      },
+      () => {
+        // Ignore transient permission errors before initial creation
+      }
+    );
+    return () => unsub();
+  }, [authReady, firebaseUser]);
 
   // Session inactivity auto-expiry
   useEffect(() => {
@@ -401,13 +433,16 @@ export default function App() {
     };
   }, [firebaseUser, settings?.sessionTimeoutMinutes]);
 
-  // Real-time Firestore listeners (only after authReady + signed-in userProfile)
+  // Real-time Firestore listeners (only after authReady + approved Active userProfile)
   useEffect(() => {
     if (!authReady || !firebaseUser || !userProfile) return;
+    const isBootAdmin = firebaseUser.email === BOOTSTRAPPED_ADMIN_EMAIL && firebaseUser.emailVerified;
+    if (userProfile.status !== 'Active' && !isBootAdmin) return;
 
     const isSuper =
-      firebaseUser.email === BOOTSTRAPPED_ADMIN_EMAIL ||
+      isBootAdmin ||
       userProfile.role === 'Super Administrator';
+    const isFacilityAdmin = userProfile.role === 'Hospital Administrator';
 
     const piiQuery = (colName: string): Query<DocumentData> =>
       isSuper
@@ -429,17 +464,19 @@ export default function App() {
         }
       );
 
+    const usersQuery = isSuper
+      ? collection(db, 'users')
+      : isFacilityAdmin
+        ? query(collection(db, 'users'), where('facilityId', '==', userProfile.facilityId))
+        : query(collection(db, 'users'), where('uid', '==', firebaseUser.uid));
+
     const unsubs = [
       subscribe<Facility>(
         'facilities',
         isSuper ? collection(db, 'facilities') : query(collection(db, 'facilities'), where('status', '==', 'Approved')),
         setFacilities
       ),
-      subscribe<UserProfile>(
-        'users',
-        isSuper ? collection(db, 'users') : query(collection(db, 'users'), where('uid', '==', firebaseUser.uid)),
-        setStaffUsers
-      ),
+      subscribe<UserProfile>('users', usersQuery, setStaffUsers),
       subscribe<Patient>('patients', piiQuery('patients'), setPatients),
       subscribe<Encounter>('encounters', piiQuery('encounters'), setEncounters),
       subscribe<ScreeningCampaign>('screeningCampaigns', collection(db, 'screeningCampaigns'), setCampaigns),
@@ -1134,7 +1171,7 @@ export default function App() {
                   {signingIn
                     ? 'Authenticating...'
                     : authMode === 'register'
-                      ? 'Create Staff Account & Enter Portal'
+                      ? 'Register & Submit for Hospital Approval'
                       : 'Login to Hospital Portal'}
                 </span>
               </button>
@@ -1157,10 +1194,10 @@ export default function App() {
 
             <div className="border-t border-slate-200 pt-3.5 text-xs text-slate-500 space-y-1">
               <p>
-                <strong>Facility & Role Isolation:</strong> Access is scoped by verified user role and selected healthcare facility under Firestore security rules.
+                <strong>Hospital Administration Approval:</strong> Every newly registered staff member remains Pending until approved by their assigned Hospital Administration.
               </p>
               <p>
-                <strong>Demonstration Safeguard:</strong> Pre-loaded demonstration records are synthetic and clearly labeled; alerts require clinician verification.
+                <strong>Facility & Role Isolation:</strong> Access is scoped by verified user role and selected healthcare facility under Firestore security rules.
               </p>
             </div>
           </div>
@@ -1192,11 +1229,120 @@ export default function App() {
     );
   }
 
+  const isBootstrappedSuperAdmin =
+    firebaseUser.email === BOOTSTRAPPED_ADMIN_EMAIL && firebaseUser.emailVerified;
+
+  // Hospital Administration Approval Gate for Pending / Suspended accounts
+  if (userProfile.status !== 'Active' && !isBootstrappedSuperAdmin) {
+    const isSuspended = userProfile.status === 'Suspended';
+    const handleRefreshApproval = async () => {
+      setRefreshingApproval(true);
+      try {
+        const snap = await getDoc(doc(db, 'users', firebaseUser.uid));
+        if (snap.exists()) {
+          setUserProfile(snap.data() as UserProfile);
+        }
+      } catch (err) {
+        console.error('Unable to refresh approval status:', err);
+      } finally {
+        setRefreshingApproval(false);
+      }
+    };
+
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="max-w-lg w-full bg-white border border-slate-200 rounded-2xl p-8 space-y-6">
+          <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+            <div className="w-10 h-10 rounded-xl overflow-hidden bg-[#0a1d37] border border-slate-200 shrink-0">
+              <img
+                src="/assets/aistudio/download_aecb1d1c.jpg"
+                alt="JaysalTech Logo"
+                className="w-full h-full object-cover object-center scale-[1.7]"
+              />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold font-display text-slate-900 truncate">
+                JAYSALTECH CENTRAL HOSPITAL HUB
+              </div>
+              <div className="text-xs text-slate-500 truncate">
+                {userProfile.facilityName || userProfile.facilityId}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className={`inline-flex items-center gap-2 text-xs font-semibold ${isSuspended ? 'text-red-700' : 'text-amber-700'}`}>
+              {isSuspended ? <ShieldAlert className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+              <span>{isSuspended ? 'ACCOUNT ACCESS SUSPENDED' : 'PENDING HOSPITAL ADMINISTRATION APPROVAL'}</span>
+            </div>
+            <h1 className="text-xl font-bold font-display text-slate-900">
+              {isSuspended
+                ? 'Your portal access is currently suspended'
+                : 'Awaiting Hospital Administration verification'}
+            </h1>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              {isSuspended
+                ? `Your account for ${userProfile.facilityName || userProfile.facilityId} was suspended or declined by Hospital Administration. Contact your facility administrator to restore access.`
+                : `Every newly registered clinician or staff member must be approved by the Hospital Administration at ${userProfile.facilityName || userProfile.facilityId} (or the Platform Super Administrator) before accessing patient or clinical modules.`}
+            </p>
+          </div>
+
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-slate-500">Staff Member</span>
+              <span className="font-semibold text-slate-900">{userProfile.displayName}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-slate-500">Username / Email</span>
+              <span className="font-mono text-slate-800">{userProfile.email}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-slate-500">Assigned Hospital</span>
+              <span className="font-semibold text-slate-900">{userProfile.facilityName || userProfile.facilityId}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-slate-500">Requested Role</span>
+              <span className="font-medium text-slate-800">{userProfile.role}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-slate-500">Approval Status</span>
+              <span className={`font-semibold ${isSuspended ? 'text-red-700' : 'text-amber-700'}`}>
+                {userProfile.status}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              type="button"
+              disabled={refreshingApproval}
+              onClick={handleRefreshApproval}
+              className="flex-1 inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshingApproval ? 'animate-spin' : ''}`} />
+              <span>{refreshingApproval ? 'Checking...' : 'Check Approval Status'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => signOut(auth)}
+              className="inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold rounded-xl"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const currentNavItem = NAV_ITEMS.find((n) => n.key === activeModule);
+  const pendingApprovalsCount = staffUsers.filter((s) => s.status === 'Pending').length;
 
   return (
     <div className="min-h-screen bg-slate-50 flex text-slate-900">
-      {/* Desktop Sidebar */}
+      {/* Desktop Sidebar (hidden in simplified Emergency Mode) */}
+      {!emergencyMode && (
       <aside className="hidden lg:flex lg:flex-col w-64 bg-slate-900 text-slate-100 shrink-0 border-r border-slate-800">
         <button
           type="button"
@@ -1247,9 +1393,10 @@ export default function App() {
           </div>
         </div>
       </aside>
+      )}
 
       {/* Mobile Navigation Drawer */}
-      {mobileNavOpen && (
+      {!emergencyMode && mobileNavOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div className="fixed inset-0 bg-slate-900/60" onClick={() => setMobileNavOpen(false)} />
           <aside className="relative w-64 bg-slate-900 text-slate-100 h-full flex flex-col z-10">
@@ -1305,17 +1452,21 @@ export default function App() {
         {/* Top Bar */}
         <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-4 sticky top-0 z-30">
           <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => setMobileNavOpen(true)}
-              className="lg:hidden p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100"
-              aria-label="Open navigation"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
+            {!emergencyMode && (
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(true)}
+                className="lg:hidden p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100"
+                aria-label="Open navigation"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+            )}
             <div className="min-w-0">
               <div className="text-sm font-bold font-display text-slate-900 truncate">
-                {currentNavItem?.label || 'JaysalTech Central Hospital Hub'}
+                {emergencyMode
+                  ? 'Emergency Response & Active Triage'
+                  : currentNavItem?.label || 'JaysalTech Central Hospital Hub'}
               </div>
               <div className="text-[11px] text-slate-500 hidden sm:block truncate">
                 JaysalTech Central Hospital Hub · {userProfile.facilityName || 'Network Wide'}
@@ -1324,7 +1475,23 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
-            {/* Global Search */}
+            {/* Emergency Mode Toggle */}
+            <button
+              type="button"
+              onClick={() => setEmergencyMode((prev) => !prev)}
+              aria-pressed={emergencyMode}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                emergencyMode
+                  ? 'bg-red-700 text-white border-red-700 hover:bg-red-800'
+                  : 'bg-red-50/70 text-red-700 border-red-200 hover:bg-red-100'
+              }`}
+            >
+              <Siren className="w-3.5 h-3.5 shrink-0" />
+              <span>{emergencyMode ? 'Exit Emergency Mode' : 'Emergency Mode'}</span>
+            </button>
+
+            {/* Global Search (standard mode) */}
+            {!emergencyMode && (
             <div ref={searchContainerRef} className="relative hidden md:block">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
@@ -1359,9 +1526,10 @@ export default function App() {
                 </div>
               )}
             </div>
+            )}
 
             {/* Super Admin Role Preview Switcher */}
-            {userProfile.role === 'Super Administrator' && (
+            {!emergencyMode && userProfile.role === 'Super Administrator' && (
               <select
                 aria-label="Preview role permissions"
                 value={effectiveRole}
@@ -1380,6 +1548,7 @@ export default function App() {
             )}
 
             {/* Print Preview & Export Current Module */}
+            {!emergencyMode && (
             <button
               type="button"
               onClick={() => setShowPrintPreview(true)}
@@ -1389,6 +1558,7 @@ export default function App() {
             >
               <Printer className="w-4 h-4" />
             </button>
+            )}
 
             {/* Notification Centre */}
             <div ref={notifContainerRef} className="relative">
@@ -1477,37 +1647,56 @@ export default function App() {
 
         {/* Active Module Viewport */}
         <main className="flex-1 p-4 sm:p-6 max-w-[1440px] w-full mx-auto">
-          <PrintLetterhead
-            documentTitle={PRINT_DOCUMENT_TITLES[activeModule] || 'Hospital Operations Report'}
-            facilityName={userProfile.facilityName || 'Network Wide'}
-            preparedBy={userProfile.displayName}
-            preparedRole={effectiveRole}
-          />
-          <ModuleRecordsToolbar
-            moduleKey={activeModule}
-            user={userProfile}
-            effectiveRole={effectiveRole}
-            data={hubSnapshot}
-            onOpenPrintPreview={() => setShowPrintPreview(true)}
-            onToast={showToast}
-          />
-          {activeModule === 'overview' && (
-            <OverviewDashboard
-              facilities={facilities}
+          {emergencyMode ? (
+            <EmergencyDashboard
+              user={userProfile}
               patients={patients}
               encounters={encounters}
               screenings={screenings}
-              followUpTasks={followUpTasks}
-              alerts={alerts}
-              labOrders={labOrders}
-              medicines={medicines}
+              labs={labOrders}
+              prescriptions={prescriptions}
               referrals={referrals}
-              surveillance={surveillance}
-              seeding={seeding}
-              onSeedDataset={handleSeedDataset}
-              onNavigate={setActiveModule}
+              claims={claims}
+              canEditEncounters={perms.canEditEncounters}
+              onExitEmergencyMode={() => setEmergencyMode(false)}
+              onLogAudit={logAudit}
+              onToast={showToast}
             />
-          )}
+          ) : (
+            <>
+              <PrintLetterhead
+                documentTitle={PRINT_DOCUMENT_TITLES[activeModule] || 'Hospital Operations Report'}
+                facilityName={userProfile.facilityName || 'Network Wide'}
+                preparedBy={userProfile.displayName}
+                preparedRole={effectiveRole}
+              />
+              <ModuleRecordsToolbar
+                moduleKey={activeModule}
+                user={userProfile}
+                effectiveRole={effectiveRole}
+                data={hubSnapshot}
+                onOpenPrintPreview={() => setShowPrintPreview(true)}
+                onToast={showToast}
+              />
+              {activeModule === 'overview' && (
+                <OverviewDashboard
+                  facilities={facilities}
+                  patients={patients}
+                  encounters={encounters}
+                  screenings={screenings}
+                  followUpTasks={followUpTasks}
+                  alerts={alerts}
+                  labOrders={labOrders}
+                  medicines={medicines}
+                  referrals={referrals}
+                  surveillance={surveillance}
+                  seeding={seeding}
+                  pendingApprovalsCount={pendingApprovalsCount}
+                  canManageUsers={perms.canManageUsers}
+                  onSeedDataset={handleSeedDataset}
+                  onNavigate={setActiveModule}
+                />
+              )}
 
           {activeModule === 'population-health' && (
             <PopulationHealthModule
@@ -1598,21 +1787,23 @@ export default function App() {
             />
           )}
 
-          {activeModule === 'admin-docs' && (
-            <AdminGovernanceModule
-              user={userProfile}
-              facilities={facilities}
-              staffUsers={staffUsers}
-              settings={settings}
-              auditLogs={auditLogs}
-              canManageFacilities={perms.canManageFacilities}
-              canManageUsers={perms.canManageUsers}
-              onLogAudit={logAudit}
-              onToast={showToast}
-            />
-          )}
+              {activeModule === 'admin-docs' && (
+                <AdminGovernanceModule
+                  user={userProfile}
+                  facilities={facilities}
+                  staffUsers={staffUsers}
+                  settings={settings}
+                  auditLogs={auditLogs}
+                  canManageFacilities={perms.canManageFacilities}
+                  canManageUsers={perms.canManageUsers}
+                  onLogAudit={logAudit}
+                  onToast={showToast}
+                />
+              )}
 
-          <PrintFooter preparedBy={userProfile.displayName} preparedRole={effectiveRole} />
+              <PrintFooter preparedBy={userProfile.displayName} preparedRole={effectiveRole} />
+            </>
+          )}
         </main>
       </div>
 

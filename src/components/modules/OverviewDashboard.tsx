@@ -27,6 +27,8 @@ interface Props {
   referrals: Referral[];
   surveillance: SurveillanceRecord[];
   seeding: boolean;
+  pendingApprovalsCount?: number;
+  canManageUsers?: boolean;
   onSeedDataset: () => Promise<void>;
   onNavigate: (mod: ModuleKey) => void;
 }
@@ -43,6 +45,8 @@ export const OverviewDashboard: React.FC<Props> = ({
   referrals,
   surveillance,
   seeding,
+  pendingApprovalsCount = 0,
+  canManageUsers = false,
   onSeedDataset,
   onNavigate,
 }) => {
@@ -93,6 +97,24 @@ export const OverviewDashboard: React.FC<Props> = ({
 
   return (
     <div className="space-y-6">
+      {/* Pending Staff Approvals Notice for Hospital / Super Administrators */}
+      {canManageUsers && pendingApprovalsCount > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="text-xs text-amber-950">
+            <span className="font-bold font-mono tabular-nums">{pendingApprovalsCount}</span>{' '}
+            registered hospital staff {pendingApprovalsCount === 1 ? 'account is' : 'accounts are'} awaiting Hospital Administration approval before accessing the portal.
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('admin-docs')}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg whitespace-nowrap shrink-0"
+          >
+            <span>Review Pending Staff</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Empty/Seed prompt banner when database is fresh */}
       {facilities.length === 0 && (
         <div className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, ShieldCheck, Building2, Sliders, FileText, CheckCircle2, Download, Copy } from 'lucide-react';
+import { Plus, ShieldCheck, Building2, Sliders, FileText, CheckCircle2, Download, Copy, UserCheck, XCircle } from 'lucide-react';
 import {
   SIERRA_LEONE_DISTRICTS,
   USER_ROLES,
@@ -38,7 +38,14 @@ export const AdminGovernanceModule: React.FC<Props> = ({
   onLogAudit,
   onToast,
 }) => {
-  const [tab, setTab] = useState<'facilities' | 'staff' | 'settings' | 'audit' | 'docs'>('facilities');
+  const isSuperAdmin = user.role === 'Super Administrator';
+  const pendingStaff = staffUsers.filter((s) => s.status === 'Pending');
+  const [tab, setTab] = useState<'facilities' | 'staff' | 'settings' | 'audit' | 'docs'>(
+    !canManageFacilities && canManageUsers ? 'staff' : 'facilities'
+  );
+  const assignableRoles = isSuperAdmin
+    ? USER_ROLES
+    : USER_ROLES.filter((r) => r !== 'Super Administrator');
 
   // Facility Form
   const [showFacForm, setShowFacForm] = useState(false);
@@ -165,8 +172,21 @@ export const AdminGovernanceModule: React.FC<Props> = ({
         status: nextStatus,
         updatedAt: new Date().toISOString(),
       });
-      await onLogAudit('UPDATE_USER_STATUS', 'UserProfile', target.uid, `Updated ${target.email} status to ${nextStatus}`);
-      onToast(`${target.displayName} status updated to ${nextStatus}.`);
+      const actionName =
+        target.status === 'Pending' && nextStatus === 'Active'
+          ? 'APPROVE_STAFF_USER'
+          : 'UPDATE_USER_STATUS';
+      await onLogAudit(
+        actionName,
+        'UserProfile',
+        target.uid,
+        `Updated ${target.email} (${target.facilityName || target.facilityId}) status from ${target.status} to ${nextStatus}`
+      );
+      onToast(
+        nextStatus === 'Active' && target.status === 'Pending'
+          ? `Approved ${target.displayName} for ${target.facilityName || target.facilityId}.`
+          : `${target.displayName} status updated to ${nextStatus}.`
+      );
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Unable to update staff status.');
     }
@@ -208,7 +228,7 @@ export const AdminGovernanceModule: React.FC<Props> = ({
         <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-lg">
           {([
             ['facilities', 'Hospitals', Building2],
-            ['staff', 'Users & RBAC', ShieldCheck],
+            ['staff', pendingStaff.length > 0 ? `Users & RBAC (${pendingStaff.length} Pending)` : 'Users & RBAC', ShieldCheck],
             ['settings', 'Thresholds', Sliders],
             ['audit', 'Audit Logs', FileText],
             ['docs', 'SQL & Docs', FileText],
@@ -319,75 +339,156 @@ export const AdminGovernanceModule: React.FC<Props> = ({
       )}
 
       {tab === 'staff' && (
-        <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
-          <div className="px-5 py-3 border-b border-slate-200 text-xs text-slate-600">
-            Authenticated Platform Staff & 10-Role Access Control Matrix
-          </div>
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
-              <tr>
-                <th className="py-2.5 px-4 font-semibold">Staff Member</th>
-                <th className="py-2.5 px-4 font-semibold">Facility</th>
-                <th className="py-2.5 px-4 font-semibold">Current Role</th>
-                <th className="py-2.5 px-4 font-semibold">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {staffUsers.map((s) => (
-                <tr key={s.uid}>
-                  <td className="py-2.5 px-4">
-                    <div className="font-semibold text-slate-900">{s.displayName}</div>
-                    <div className="text-slate-500">{s.email}</div>
-                  </td>
-                  <td className="py-2.5 px-4 text-slate-700">
-                    {canManageUsers && facilities.length > 0 ? (
-                      <select
-                        value={s.facilityId}
-                        onChange={(e) => handleStaffFacilityUpdate(s, e.target.value)}
-                        className="px-2.5 py-1 border border-slate-300 rounded bg-white text-xs max-w-[220px]"
-                      >
-                        {facilities.map((f) => (
-                          <option key={f.id} value={f.id}>{f.name}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span>{s.facilityName || s.facilityId}</span>
-                    )}
-                  </td>
-                  <td className="py-2.5 px-4">
-                    {canManageUsers ? (
-                      <select
-                        value={s.role}
-                        onChange={(e) => handleRoleUpdate(s, e.target.value as UserRole)}
-                        className="px-2.5 py-1 border border-slate-300 rounded bg-white text-xs"
-                      >
-                        {USER_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-                      </select>
-                    ) : (
-                      <span className="font-medium text-slate-800">{s.role}</span>
-                    )}
-                  </td>
-                  <td className="py-2.5 px-4">
-                    {canManageUsers ? (
-                      <select
-                        value={s.status}
-                        onChange={(e) => handleStaffStatusUpdate(s, e.target.value as UserProfile['status'])}
-                        className={`px-2.5 py-1 border border-slate-300 rounded bg-white text-xs font-medium ${
-                          s.status === 'Active' ? 'text-emerald-700' : s.status === 'Suspended' ? 'text-red-700' : 'text-amber-700'
-                        }`}
-                      >
-                        <option value="Active">Active</option>
-                        <option value="Pending">Pending</option>
-                        <option value="Suspended">Suspended</option>
-                      </select>
-                    ) : (
-                      <span className="text-emerald-700 font-medium">{s.status}</span>
-                    )}
-                  </td>
+        <div className="space-y-4">
+          {canManageUsers && (
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    Pending Hospital Administration Approvals ({pendingStaff.length})
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {isSuperAdmin
+                      ? 'Every newly registered staff member requires approval before accessing clinical or operational data.'
+                      : `Showing pending staff registrations assigned to ${user.facilityName || user.facilityId}.`}
+                  </p>
+                </div>
+              </div>
+
+              {pendingStaff.length === 0 ? (
+                <div className="px-5 py-4 text-xs text-slate-500">
+                  No staff accounts are currently awaiting hospital administration approval.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {pendingStaff.map((s) => (
+                    <div
+                      key={s.uid}
+                      className="px-5 py-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-amber-50/40"
+                    >
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-bold text-slate-900">
+                          {s.displayName} <span className="font-normal text-slate-500">· {s.email}</span>
+                        </div>
+                        <div className="text-xs text-slate-600">
+                          Hospital: <span className="font-semibold text-slate-800">{s.facilityName || s.facilityId}</span>
+                          {' · '}Requested Role: <span className="font-semibold text-slate-800">{s.role}</span>
+                          {s.department ? ` · ${s.department}` : ''}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <select
+                          aria-label={`Assign role for ${s.displayName}`}
+                          value={s.role}
+                          onChange={(e) => handleRoleUpdate(s, e.target.value as UserRole)}
+                          className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white text-xs"
+                        >
+                          {assignableRoles.map((r) => (
+                            <option key={r} value={r}>{r}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => handleStaffStatusUpdate(s, 'Active')}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg whitespace-nowrap"
+                        >
+                          <UserCheck className="w-3.5 h-3.5" />
+                          <span>Approve Access</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleStaffStatusUpdate(s, 'Suspended')}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-red-700 bg-white border border-red-200 hover:bg-red-50 rounded-lg whitespace-nowrap"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>Reject</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
+            <div className="px-5 py-3 border-b border-slate-200 text-xs text-slate-600">
+              {isSuperAdmin
+                ? 'Authenticated Platform Staff & 10-Role Access Control Matrix'
+                : `Hospital Staff Directory — ${user.facilityName || user.facilityId}`}
+            </div>
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                <tr>
+                  <th className="py-2.5 px-4 font-semibold">Staff Member</th>
+                  <th className="py-2.5 px-4 font-semibold">Facility</th>
+                  <th className="py-2.5 px-4 font-semibold">Current Role</th>
+                  <th className="py-2.5 px-4 font-semibold">Approval Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {staffUsers.map((s) => {
+                  const canEditTarget =
+                    canManageUsers &&
+                    (isSuperAdmin || s.role !== 'Super Administrator');
+                  return (
+                    <tr key={s.uid}>
+                      <td className="py-2.5 px-4">
+                        <div className="font-semibold text-slate-900">{s.displayName}</div>
+                        <div className="text-slate-500">{s.email}</div>
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-700">
+                        {isSuperAdmin && facilities.length > 0 ? (
+                          <select
+                            value={s.facilityId}
+                            onChange={(e) => handleStaffFacilityUpdate(s, e.target.value)}
+                            className="px-2.5 py-1 border border-slate-300 rounded bg-white text-xs max-w-[220px]"
+                          >
+                            {facilities.map((f) => (
+                              <option key={f.id} value={f.id}>{f.name}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span>{s.facilityName || s.facilityId}</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        {canEditTarget ? (
+                          <select
+                            value={s.role}
+                            onChange={(e) => handleRoleUpdate(s, e.target.value as UserRole)}
+                            className="px-2.5 py-1 border border-slate-300 rounded bg-white text-xs"
+                          >
+                            {assignableRoles.map((r) => <option key={r} value={r}>{r}</option>)}
+                          </select>
+                        ) : (
+                          <span className="font-medium text-slate-800">{s.role}</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        {canEditTarget ? (
+                          <select
+                            value={s.status}
+                            onChange={(e) => handleStaffStatusUpdate(s, e.target.value as UserProfile['status'])}
+                            className={`px-2.5 py-1 border border-slate-300 rounded bg-white text-xs font-medium ${
+                              s.status === 'Active' ? 'text-emerald-700' : s.status === 'Suspended' ? 'text-red-700' : 'text-amber-700'
+                            }`}
+                          >
+                            <option value="Active">Active (Approved)</option>
+                            <option value="Pending">Pending Approval</option>
+                            <option value="Suspended">Suspended</option>
+                          </select>
+                        ) : (
+                          <span className="text-emerald-700 font-medium">{s.status}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

@@ -25,12 +25,32 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email == 'jaahwix@gmail.com' && request.auth.token.email_verified == true;
     }
 
-    function isAdmin() {
+    function userDocExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActiveUser() {
       return isBootstrappedAdmin() || (
         isSignedIn() &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Super Administrator'
+        userDocExists() &&
+        userDoc().status == 'Active'
       );
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isActiveUser() &&
+        userDoc().role == 'Super Administrator'
+      );
+    }
+
+    function isHospitalAdmin() {
+      return isActiveUser() &&
+        userDoc().role == 'Hospital Administrator';
     }
 
     function isValidId(id) {
@@ -82,21 +102,44 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
-      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().uid == request.auth.uid);
+      allow get: if isSignedIn() && isValidId(userId) && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        (isHospitalAdmin() && existing().facilityId == userDoc().facilityId)
+      );
+      allow list: if isSignedIn() && (
+        isBootstrappedAdmin() ||
+        isAdmin() ||
+        existing().uid == request.auth.uid ||
+        (isHospitalAdmin() && existing().facilityId == userDoc().facilityId)
+      );
       allow create: if isSignedIn() && isValidId(userId) && isValidUserProfile(incoming()) &&
         incoming().uid == request.auth.uid &&
-        (isBootstrappedAdmin() || incoming().role != 'Super Administrator');
+        (
+          isBootstrappedAdmin() ||
+          (incoming().role != 'Super Administrator' && incoming().status == 'Pending')
+        );
       allow update: if isSignedIn() && isValidId(userId) && isValidUserProfile(incoming()) &&
         incoming().uid == existing().uid &&
         incoming().createdAt == existing().createdAt &&
         (
           isAdmin() ||
           (
+            isHospitalAdmin() &&
+            existing().facilityId == userDoc().facilityId &&
+            incoming().facilityId == existing().facilityId &&
+            existing().role != 'Super Administrator' &&
+            incoming().role != 'Super Administrator' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'department', 'status', 'updatedAt'])
+          ) ||
+          (
             request.auth.uid == userId &&
             incoming().role == existing().role &&
-            incoming().status == existing().status &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'facilityId', 'facilityName', 'department', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'facilityId', 'facilityName', 'department', 'status', 'updatedAt']) &&
+            (
+              (incoming().facilityId == existing().facilityId && incoming().status == existing().status) ||
+              (incoming().facilityId != existing().facilityId && incoming().status == 'Pending')
+            )
           )
         );
       allow delete: if isBootstrappedAdmin() && isValidId(userId);
@@ -124,11 +167,11 @@ service cloud.firestore {
     }
 
     match /facilities/{facilityId} {
-      allow get: if isSignedIn() && isValidId(facilityId) && (isAdmin() || existing().status == 'Approved' || existing().createdByUid == request.auth.uid);
-      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().status == 'Approved' || existing().createdByUid == request.auth.uid);
-      allow create: if isSignedIn() && isValidId(facilityId) && isValidFacility(incoming()) &&
+      allow get: if isActiveUser() && isValidId(facilityId) && (isAdmin() || existing().status == 'Approved' || existing().createdByUid == request.auth.uid);
+      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().status == 'Approved' || existing().createdByUid == request.auth.uid);
+      allow create: if isActiveUser() && isValidId(facilityId) && isValidFacility(incoming()) &&
         incoming().id == facilityId && incoming().createdByUid == request.auth.uid;
-      allow update: if isSignedIn() && isValidId(facilityId) && isValidFacility(incoming()) &&
+      allow update: if isActiveUser() && isValidId(facilityId) && isValidFacility(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (
           isAdmin() ||
@@ -166,11 +209,11 @@ service cloud.firestore {
     }
 
     match /patients/{patientId} {
-      allow get: if isSignedIn() && isValidId(patientId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isSignedIn() && isAuthorizedRecord(existing());
-      allow create: if isSignedIn() && isValidId(patientId) && isValidPatient(incoming()) &&
+      allow get: if isActiveUser() && isValidId(patientId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow create: if isActiveUser() && isValidId(patientId) && isValidPatient(incoming()) &&
         incoming().id == patientId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
-      allow update: if isSignedIn() && isValidId(patientId) && isValidPatient(incoming()) &&
+      allow update: if isActiveUser() && isValidId(patientId) && isValidPatient(incoming()) &&
         incoming().id == existing().id && incoming().patientUid == existing().patientUid &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || isAuthorizedRecord(existing())) &&
@@ -207,11 +250,11 @@ service cloud.firestore {
     }
 
     match /encounters/{encounterId} {
-      allow get: if isSignedIn() && isValidId(encounterId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isSignedIn() && isAuthorizedRecord(existing());
-      allow create: if isSignedIn() && isValidId(encounterId) && isValidEncounter(incoming()) &&
+      allow get: if isActiveUser() && isValidId(encounterId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow create: if isActiveUser() && isValidId(encounterId) && isValidEncounter(incoming()) &&
         incoming().id == encounterId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
-      allow update: if isSignedIn() && isValidId(encounterId) && isValidEncounter(incoming()) &&
+      allow update: if isActiveUser() && isValidId(encounterId) && isValidEncounter(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || (isAuthorizedRecord(existing()) && existing().status != 'Discharged')) &&
@@ -241,11 +284,11 @@ service cloud.firestore {
     }
 
     match /screeningCampaigns/{campaignId} {
-      allow get: if isSignedIn() && isValidId(campaignId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
-      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
-      allow create: if isSignedIn() && isValidId(campaignId) && isValidCampaign(incoming()) &&
+      allow get: if isActiveUser() && isValidId(campaignId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow create: if isActiveUser() && isValidId(campaignId) && isValidCampaign(incoming()) &&
         incoming().id == campaignId && incoming().createdByUid == request.auth.uid;
-      allow update: if isSignedIn() && isValidId(campaignId) && isValidCampaign(incoming()) &&
+      allow update: if isActiveUser() && isValidId(campaignId) && isValidCampaign(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || existing().createdByUid == request.auth.uid) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'targetCount', 'screenedCount', 'endDate', 'status', 'updatedAt']);
@@ -286,11 +329,11 @@ service cloud.firestore {
     }
 
     match /screenings/{screeningId} {
-      allow get: if isSignedIn() && isValidId(screeningId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isSignedIn() && isAuthorizedRecord(existing());
-      allow create: if isSignedIn() && isValidId(screeningId) && isValidScreening(incoming()) &&
+      allow get: if isActiveUser() && isValidId(screeningId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow create: if isActiveUser() && isValidId(screeningId) && isValidScreening(incoming()) &&
         incoming().id == screeningId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
-      allow update: if isSignedIn() && isValidId(screeningId) && isValidScreening(incoming()) &&
+      allow update: if isActiveUser() && isValidId(screeningId) && isValidScreening(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || isAuthorizedRecord(existing())) &&
@@ -324,11 +367,11 @@ service cloud.firestore {
     }
 
     match /followUpTasks/{taskId} {
-      allow get: if isSignedIn() && isValidId(taskId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isSignedIn() && isAuthorizedRecord(existing());
-      allow create: if isSignedIn() && isValidId(taskId) && isValidFollowUpTask(incoming()) &&
+      allow get: if isActiveUser() && isValidId(taskId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow create: if isActiveUser() && isValidId(taskId) && isValidFollowUpTask(incoming()) &&
         incoming().id == taskId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
-      allow update: if isSignedIn() && isValidId(taskId) && isValidFollowUpTask(incoming()) &&
+      allow update: if isActiveUser() && isValidId(taskId) && isValidFollowUpTask(incoming()) &&
         incoming().id == existing().id && incoming().screeningId == existing().screeningId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || isAuthorizedRecord(existing())) &&
@@ -363,11 +406,11 @@ service cloud.firestore {
     }
 
     match /referrals/{referralId} {
-      allow get: if isSignedIn() && isValidId(referralId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isSignedIn() && isAuthorizedRecord(existing());
-      allow create: if isSignedIn() && isValidId(referralId) && isValidReferral(incoming()) &&
+      allow get: if isActiveUser() && isValidId(referralId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow create: if isActiveUser() && isValidId(referralId) && isValidReferral(incoming()) &&
         incoming().id == referralId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
-      allow update: if isSignedIn() && isValidId(referralId) && isValidReferral(incoming()) &&
+      allow update: if isActiveUser() && isValidId(referralId) && isValidReferral(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || isAuthorizedRecord(existing())) &&
@@ -401,11 +444,11 @@ service cloud.firestore {
     }
 
     match /labOrders/{orderId} {
-      allow get: if isSignedIn() && isValidId(orderId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isSignedIn() && isAuthorizedRecord(existing());
-      allow create: if isSignedIn() && isValidId(orderId) && isValidLabOrder(incoming()) &&
+      allow get: if isActiveUser() && isValidId(orderId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow create: if isActiveUser() && isValidId(orderId) && isValidLabOrder(incoming()) &&
         incoming().id == orderId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
-      allow update: if isSignedIn() && isValidId(orderId) && isValidLabOrder(incoming()) &&
+      allow update: if isActiveUser() && isValidId(orderId) && isValidLabOrder(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || (isAuthorizedRecord(existing()) && existing().status != 'Approved')) &&
@@ -436,11 +479,11 @@ service cloud.firestore {
     }
 
     match /medicines/{medicineId} {
-      allow get: if isSignedIn() && isValidId(medicineId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
-      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
-      allow create: if isSignedIn() && isValidId(medicineId) && isValidMedicine(incoming()) &&
+      allow get: if isActiveUser() && isValidId(medicineId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow create: if isActiveUser() && isValidId(medicineId) && isValidMedicine(incoming()) &&
         incoming().id == medicineId && incoming().createdByUid == request.auth.uid;
-      allow update: if isSignedIn() && isValidId(medicineId) && isValidMedicine(incoming()) &&
+      allow update: if isActiveUser() && isValidId(medicineId) && isValidMedicine(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || existing().createdByUid == request.auth.uid) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['stockQuantity', 'reorderLevel', 'batchNumber', 'expiryDate', 'unitPrice', 'updatedAt']);
@@ -473,11 +516,11 @@ service cloud.firestore {
     }
 
     match /prescriptions/{prescriptionId} {
-      allow get: if isSignedIn() && isValidId(prescriptionId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isSignedIn() && isAuthorizedRecord(existing());
-      allow create: if isSignedIn() && isValidId(prescriptionId) && isValidPrescription(incoming()) &&
+      allow get: if isActiveUser() && isValidId(prescriptionId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow create: if isActiveUser() && isValidId(prescriptionId) && isValidPrescription(incoming()) &&
         incoming().id == prescriptionId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
-      allow update: if isSignedIn() && isValidId(prescriptionId) && isValidPrescription(incoming()) &&
+      allow update: if isActiveUser() && isValidId(prescriptionId) && isValidPrescription(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || (isAuthorizedRecord(existing()) && existing().status == 'Pending')) &&
@@ -507,11 +550,11 @@ service cloud.firestore {
     }
 
     match /bloodDonors/{donorId} {
-      allow get: if isSignedIn() && isValidId(donorId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isSignedIn() && isAuthorizedRecord(existing());
-      allow create: if isSignedIn() && isValidId(donorId) && isValidBloodDonor(incoming()) &&
+      allow get: if isActiveUser() && isValidId(donorId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow create: if isActiveUser() && isValidId(donorId) && isValidBloodDonor(incoming()) &&
         incoming().id == donorId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
-      allow update: if isSignedIn() && isValidId(donorId) && isValidBloodDonor(incoming()) &&
+      allow update: if isActiveUser() && isValidId(donorId) && isValidBloodDonor(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || isAuthorizedRecord(existing())) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['lastDonationDate', 'eligibilityStatus', 'unitsDonated', 'phone', 'updatedAt']);
@@ -539,11 +582,11 @@ service cloud.firestore {
     }
 
     match /bloodInventory/{unitId} {
-      allow get: if isSignedIn() && isValidId(unitId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
-      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
-      allow create: if isSignedIn() && isValidId(unitId) && isValidBloodUnit(incoming()) &&
+      allow get: if isActiveUser() && isValidId(unitId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow create: if isActiveUser() && isValidId(unitId) && isValidBloodUnit(incoming()) &&
         incoming().id == unitId && incoming().createdByUid == request.auth.uid;
-      allow update: if isSignedIn() && isValidId(unitId) && isValidBloodUnit(incoming()) &&
+      allow update: if isActiveUser() && isValidId(unitId) && isValidBloodUnit(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || existing().createdByUid == request.auth.uid) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'crossMatchPatientName', 'updatedAt']);
@@ -574,11 +617,11 @@ service cloud.firestore {
     }
 
     match /insuranceClaims/{claimId} {
-      allow get: if isSignedIn() && isValidId(claimId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isSignedIn() && isAuthorizedRecord(existing());
-      allow create: if isSignedIn() && isValidId(claimId) && isValidInsuranceClaim(incoming()) &&
+      allow get: if isActiveUser() && isValidId(claimId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow create: if isActiveUser() && isValidId(claimId) && isValidInsuranceClaim(incoming()) &&
         incoming().id == claimId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
-      allow update: if isSignedIn() && isValidId(claimId) && isValidInsuranceClaim(incoming()) &&
+      allow update: if isActiveUser() && isValidId(claimId) && isValidInsuranceClaim(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || (isAuthorizedRecord(existing()) && existing().status != 'Paid')) &&
@@ -611,11 +654,11 @@ service cloud.firestore {
     }
 
     match /telemedicineAppointments/{appointmentId} {
-      allow get: if isSignedIn() && isValidId(appointmentId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isSignedIn() && isAuthorizedRecord(existing());
-      allow create: if isSignedIn() && isValidId(appointmentId) && isValidTelemedicine(incoming()) &&
+      allow get: if isActiveUser() && isValidId(appointmentId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow create: if isActiveUser() && isValidId(appointmentId) && isValidTelemedicine(incoming()) &&
         incoming().id == appointmentId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
-      allow update: if isSignedIn() && isValidId(appointmentId) && isValidTelemedicine(incoming()) &&
+      allow update: if isActiveUser() && isValidId(appointmentId) && isValidTelemedicine(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || isAuthorizedRecord(existing())) &&
@@ -647,11 +690,11 @@ service cloud.firestore {
     }
 
     match /surveillanceRecords/{recordId} {
-      allow get: if isSignedIn() && isValidId(recordId) && (isAdmin() || existing().isAggregate == true);
-      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().isAggregate == true);
-      allow create: if isSignedIn() && isValidId(recordId) && isValidSurveillanceRecord(incoming()) &&
+      allow get: if isActiveUser() && isValidId(recordId) && (isAdmin() || existing().isAggregate == true);
+      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().isAggregate == true);
+      allow create: if isActiveUser() && isValidId(recordId) && isValidSurveillanceRecord(incoming()) &&
         incoming().id == recordId && incoming().createdByUid == request.auth.uid;
-      allow update: if isSignedIn() && isValidId(recordId) && isValidSurveillanceRecord(incoming()) &&
+      allow update: if isActiveUser() && isValidId(recordId) && isValidSurveillanceRecord(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || existing().createdByUid == request.auth.uid) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['reportedCases', 'baselineCases', 'workforceAbsenteeismPct', 'screeningCoveragePct', 'climateFactor', 'updatedAt']);
@@ -685,11 +728,11 @@ service cloud.firestore {
     }
 
     match /publicHealthAlerts/{alertId} {
-      allow get: if isSignedIn() && isValidId(alertId) && (isAdmin() || existing().isAggregate == true);
-      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().isAggregate == true);
-      allow create: if isSignedIn() && isValidId(alertId) && isValidPublicHealthAlert(incoming()) &&
+      allow get: if isActiveUser() && isValidId(alertId) && (isAdmin() || existing().isAggregate == true);
+      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().isAggregate == true);
+      allow create: if isActiveUser() && isValidId(alertId) && isValidPublicHealthAlert(incoming()) &&
         incoming().id == alertId && incoming().createdByUid == request.auth.uid;
-      allow update: if isSignedIn() && isValidId(alertId) && isValidPublicHealthAlert(incoming()) &&
+      allow update: if isActiveUser() && isValidId(alertId) && isValidPublicHealthAlert(incoming()) &&
         incoming().id == existing().id && incoming().referenceNumber == existing().referenceNumber &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (isAdmin() || (existing().isAggregate == true && existing().verificationStatus != 'Resolved')) &&
@@ -714,9 +757,9 @@ service cloud.firestore {
     }
 
     match /auditLogs/{logId} {
-      allow get: if isSignedIn() && isValidId(logId) && (isAdmin() || existing().actorUid == request.auth.uid);
-      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().actorUid == request.auth.uid);
-      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming()) &&
+      allow get: if isActiveUser() && isValidId(logId) && (isAdmin() || existing().actorUid == request.auth.uid);
+      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().actorUid == request.auth.uid);
+      allow create: if isActiveUser() && isValidId(logId) && isValidAuditLog(incoming()) &&
         incoming().id == logId && incoming().actorUid == request.auth.uid;
       allow update, delete: if false;
     }
@@ -738,9 +781,9 @@ service cloud.firestore {
     }
 
     match /platformSettings/{settingId} {
-      allow get: if isSignedIn() && isValidId(settingId) && (isAdmin() || settingId == 'global');
-      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().id == 'global');
-      allow create, update: if isSignedIn() && isValidId(settingId) && isValidPlatformSettings(incoming()) &&
+      allow get: if isActiveUser() && isValidId(settingId) && (isAdmin() || settingId == 'global');
+      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().id == 'global');
+      allow create, update: if isActiveUser() && isValidId(settingId) && isValidPlatformSettings(incoming()) &&
         incoming().id == settingId && incoming().updatedByUid == request.auth.uid && isAdmin();
       allow delete: if false;
     }
