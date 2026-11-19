@@ -1,0 +1,748 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default deny everything
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core helper primitives
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() && request.auth.token.email == 'jaahwix@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Super Administrator'
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isStr(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidAuthUids(arr) {
+      return arr is list && arr.size() >= 1 && arr.size() <= 25 && arr[0] is string;
+    }
+
+    function isValidStringList(arr, maxItems) {
+      return arr is list && arr.size() <= maxItems && (arr.size() == 0 || arr[0] is string);
+    }
+
+    function isAuthorizedRecord(data) {
+      return isBootstrappedAdmin() ||
+        data.createdByUid == request.auth.uid ||
+        (data.authorizedUids is list && request.auth.uid in data.authorizedUids);
+    }
+
+    // Connection health check path (read-only for verified authenticated users)
+    match /test/{docId} {
+      allow get: if isSignedIn() && isValidId(docId);
+      allow list, write: if false;
+    }
+
+    // 1. User Profiles & RBAC
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'facilityId', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'facilityId', 'facilityName', 'department', 'status', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        isStr(data.email, 3, 200) &&
+        isStr(data.displayName, 1, 120) &&
+        data.role in [
+          'Super Administrator', 'Hospital Administrator', 'Medical Doctor', 'Nurse',
+          'Laboratory Technician', 'Pharmacist', 'Medical Records Officer',
+          'Finance Officer', 'Public Health Officer', 'Receptionist'
+        ] &&
+        isStr(data.facilityId, 1, 128) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        (!('department' in data) || isStr(data.department, 0, 100)) &&
+        data.status in ['Active', 'Suspended', 'Pending'] &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().uid == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(userId) && isValidUserProfile(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        (isBootstrappedAdmin() || incoming().role != 'Super Administrator');
+      allow update: if isSignedIn() && isValidId(userId) && isValidUserProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (
+            request.auth.uid == userId &&
+            incoming().role == existing().role &&
+            incoming().status == existing().status &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'facilityId', 'facilityName', 'department', 'updatedAt'])
+          )
+        );
+      allow delete: if isBootstrappedAdmin() && isValidId(userId);
+    }
+
+    // 2. Facilities
+    function isValidFacility(data) {
+      return data.keys().hasAll(['id', 'name', 'code', 'type', 'district', 'status', 'bedCapacity', 'departments', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'name', 'code', 'type', 'district', 'chiefdom', 'address', 'phone', 'status', 'bedCapacity', 'departments', 'isSynthetic', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isStr(data.name, 2, 160) &&
+        isStr(data.code, 2, 40) &&
+        isStr(data.type, 2, 60) &&
+        isStr(data.district, 2, 80) &&
+        (!('chiefdom' in data) || isStr(data.chiefdom, 0, 100)) &&
+        (!('address' in data) || isStr(data.address, 0, 240)) &&
+        (!('phone' in data) || isStr(data.phone, 0, 40)) &&
+        data.status in ['Approved', 'Pending', 'Suspended'] &&
+        data.bedCapacity is number && data.bedCapacity >= 0 && data.bedCapacity <= 10000 &&
+        isValidStringList(data.departments, 25) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /facilities/{facilityId} {
+      allow get: if isSignedIn() && isValidId(facilityId) && (isAdmin() || existing().status == 'Approved' || existing().createdByUid == request.auth.uid);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().status == 'Approved' || existing().createdByUid == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(facilityId) && isValidFacility(incoming()) &&
+        incoming().id == facilityId && incoming().createdByUid == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(facilityId) && isValidFacility(incoming()) &&
+        incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (existing().createdByUid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'district', 'chiefdom', 'address', 'phone', 'bedCapacity', 'departments', 'updatedAt']))
+        );
+      allow delete: if isAdmin() && isValidId(facilityId);
+    }
+
+    // 3. Patients (Strict Facility / Authorized UID PII Isolation)
+    function isValidPatient(data) {
+      return data.keys().hasAll(['id', 'patientUid', 'facilityId', 'fullName', 'dateOfBirth', 'gender', 'district', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'patientUid', 'facilityId', 'facilityName', 'fullName', 'dateOfBirth', 'gender', 'district', 'chiefdom', 'phone', 'emergencyContactName', 'emergencyContactPhone', 'bloodGroup', 'allergies', 'chronicConditions', 'insuranceProvider', 'insuranceNumber', 'isSynthetic', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isStr(data.patientUid, 4, 60) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isStr(data.fullName, 2, 160) &&
+        isStr(data.dateOfBirth, 4, 20) &&
+        data.gender in ['Female', 'Male', 'Other'] &&
+        isStr(data.district, 2, 80) &&
+        (!('chiefdom' in data) || isStr(data.chiefdom, 0, 100)) &&
+        (!('phone' in data) || isStr(data.phone, 0, 40)) &&
+        (!('emergencyContactName' in data) || isStr(data.emergencyContactName, 0, 140)) &&
+        (!('emergencyContactPhone' in data) || isStr(data.emergencyContactPhone, 0, 40)) &&
+        (!('bloodGroup' in data) || isStr(data.bloodGroup, 0, 10)) &&
+        (!('allergies' in data) || isStr(data.allergies, 0, 300)) &&
+        (!('chronicConditions' in data) || isStr(data.chronicConditions, 0, 300)) &&
+        (!('insuranceProvider' in data) || isStr(data.insuranceProvider, 0, 120)) &&
+        (!('insuranceNumber' in data) || isStr(data.insuranceNumber, 0, 80)) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidAuthUids(data.authorizedUids) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /patients/{patientId} {
+      allow get: if isSignedIn() && isValidId(patientId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isSignedIn() && isAuthorizedRecord(existing());
+      allow create: if isSignedIn() && isValidId(patientId) && isValidPatient(incoming()) &&
+        incoming().id == patientId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
+      allow update: if isSignedIn() && isValidId(patientId) && isValidPatient(incoming()) &&
+        incoming().id == existing().id && incoming().patientUid == existing().patientUid &&
+        incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'dateOfBirth', 'gender', 'district', 'chiefdom', 'phone', 'emergencyContactName', 'emergencyContactPhone', 'bloodGroup', 'allergies', 'chronicConditions', 'insuranceProvider', 'insuranceNumber', 'authorizedUids', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(patientId);
+    }
+
+    // 4. Encounters
+    function isValidEncounter(data) {
+      return data.keys().hasAll(['id', 'patientId', 'patientName', 'facilityId', 'encounterType', 'department', 'clinicianName', 'chiefComplaint', 'status', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'patientId', 'patientName', 'patientUid', 'facilityId', 'facilityName', 'encounterType', 'department', 'clinicianName', 'chiefComplaint', 'vitalSigns', 'nursingNotes', 'diagnosis', 'treatmentPlan', 'dischargeSummary', 'status', 'wardBed', 'isSynthetic', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.patientId) &&
+        isStr(data.patientName, 2, 160) &&
+        (!('patientUid' in data) || isStr(data.patientUid, 0, 60)) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        data.encounterType in ['Outpatient', 'Inpatient', 'Emergency', 'Maternal', 'Follow-Up'] &&
+        isStr(data.department, 2, 100) &&
+        isStr(data.clinicianName, 2, 140) &&
+        isStr(data.chiefComplaint, 2, 400) &&
+        (!('vitalSigns' in data) || isStr(data.vitalSigns, 0, 300)) &&
+        (!('nursingNotes' in data) || isStr(data.nursingNotes, 0, 600)) &&
+        (!('diagnosis' in data) || isStr(data.diagnosis, 0, 300)) &&
+        (!('treatmentPlan' in data) || isStr(data.treatmentPlan, 0, 600)) &&
+        (!('dischargeSummary' in data) || isStr(data.dischargeSummary, 0, 600)) &&
+        data.status in ['Triage', 'In Consultation', 'Admitted', 'Discharged', 'Completed'] &&
+        (!('wardBed' in data) || isStr(data.wardBed, 0, 60)) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidAuthUids(data.authorizedUids) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /encounters/{encounterId} {
+      allow get: if isSignedIn() && isValidId(encounterId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isSignedIn() && isAuthorizedRecord(existing());
+      allow create: if isSignedIn() && isValidId(encounterId) && isValidEncounter(incoming()) &&
+        incoming().id == encounterId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
+      allow update: if isSignedIn() && isValidId(encounterId) && isValidEncounter(incoming()) &&
+        incoming().id == existing().id && incoming().patientId == existing().patientId &&
+        incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || (isAuthorizedRecord(existing()) && existing().status != 'Discharged')) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['encounterType', 'department', 'clinicianName', 'chiefComplaint', 'vitalSigns', 'nursingNotes', 'diagnosis', 'treatmentPlan', 'dischargeSummary', 'status', 'wardBed', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(encounterId);
+    }
+
+    // 5. Screening Campaigns
+    function isValidCampaign(data) {
+      return data.keys().hasAll(['id', 'title', 'district', 'facilityId', 'targetCondition', 'targetCount', 'screenedCount', 'status', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'title', 'district', 'facilityId', 'facilityName', 'targetCondition', 'targetCount', 'screenedCount', 'startDate', 'endDate', 'status', 'isSynthetic', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isStr(data.title, 2, 180) &&
+        isStr(data.district, 2, 80) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isStr(data.targetCondition, 2, 100) &&
+        data.targetCount is number && data.targetCount >= 1 && data.targetCount <= 1000000 &&
+        data.screenedCount is number && data.screenedCount >= 0 && data.screenedCount <= 1000000 &&
+        (!('startDate' in data) || isStr(data.startDate, 0, 30)) &&
+        (!('endDate' in data) || isStr(data.endDate, 0, 30)) &&
+        data.status in ['Active', 'Planned', 'Completed'] &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /screeningCampaigns/{campaignId} {
+      allow get: if isSignedIn() && isValidId(campaignId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow create: if isSignedIn() && isValidId(campaignId) && isValidCampaign(incoming()) &&
+        incoming().id == campaignId && incoming().createdByUid == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(campaignId) && isValidCampaign(incoming()) &&
+        incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || existing().createdByUid == request.auth.uid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'targetCount', 'screenedCount', 'endDate', 'status', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(campaignId);
+    }
+
+    // 6. Screenings (Screening-to-Care Loop)
+    function isValidScreening(data) {
+      return data.keys().hasAll(['id', 'patientId', 'patientName', 'facilityId', 'district', 'screeningType', 'resultClassification', 'riskLevel', 'journeyStage', 'followUpCompleted', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'campaignId', 'patientId', 'patientName', 'patientUid', 'facilityId', 'facilityName', 'district', 'screeningType', 'measurementSummary', 'resultClassification', 'riskLevel', 'journeyStage', 'referralId', 'appointmentDate', 'treatmentStatus', 'clinicianDecision', 'followUpCompleted', 'isOverdue', 'isSynthetic', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        (!('campaignId' in data) || isStr(data.campaignId, 0, 128)) &&
+        isValidId(data.patientId) &&
+        isStr(data.patientName, 2, 160) &&
+        (!('patientUid' in data) || isStr(data.patientUid, 0, 60)) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isStr(data.district, 2, 80) &&
+        isStr(data.screeningType, 2, 100) &&
+        (!('measurementSummary' in data) || isStr(data.measurementSummary, 0, 240)) &&
+        data.resultClassification in ['Normal', 'Abnormal', 'Indeterminate'] &&
+        data.riskLevel in ['Low', 'Moderate', 'High', 'Critical'] &&
+        data.journeyStage in [
+          'Registered', 'Screened', 'Results Recorded', 'Risk Identified',
+          'Referred', 'Appointment Scheduled', 'Treatment/Intervention', 'Follow-up Completed'
+        ] &&
+        (!('referralId' in data) || isStr(data.referralId, 0, 128)) &&
+        (!('appointmentDate' in data) || isStr(data.appointmentDate, 0, 30)) &&
+        (!('treatmentStatus' in data) || isStr(data.treatmentStatus, 0, 80)) &&
+        (!('clinicianDecision' in data) || isStr(data.clinicianDecision, 0, 400)) &&
+        data.followUpCompleted is bool &&
+        (!('isOverdue' in data) || data.isOverdue is bool) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidAuthUids(data.authorizedUids) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /screenings/{screeningId} {
+      allow get: if isSignedIn() && isValidId(screeningId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isSignedIn() && isAuthorizedRecord(existing());
+      allow create: if isSignedIn() && isValidId(screeningId) && isValidScreening(incoming()) &&
+        incoming().id == screeningId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
+      allow update: if isSignedIn() && isValidId(screeningId) && isValidScreening(incoming()) &&
+        incoming().id == existing().id && incoming().patientId == existing().patientId &&
+        incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['measurementSummary', 'resultClassification', 'riskLevel', 'journeyStage', 'referralId', 'appointmentDate', 'treatmentStatus', 'clinicianDecision', 'followUpCompleted', 'isOverdue', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(screeningId);
+    }
+
+    // 7. Follow-Up Tasks
+    function isValidFollowUpTask(data) {
+      return data.keys().hasAll(['id', 'screeningId', 'patientId', 'patientName', 'facilityId', 'taskTitle', 'priority', 'dueDate', 'status', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'screeningId', 'patientId', 'patientName', 'patientUid', 'facilityId', 'district', 'taskTitle', 'priority', 'dueDate', 'assignedRole', 'status', 'resolutionNotes', 'missedCount', 'isSynthetic', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.screeningId) &&
+        isValidId(data.patientId) &&
+        isStr(data.patientName, 2, 160) &&
+        (!('patientUid' in data) || isStr(data.patientUid, 0, 60)) &&
+        isValidId(data.facilityId) &&
+        (!('district' in data) || isStr(data.district, 0, 80)) &&
+        isStr(data.taskTitle, 2, 200) &&
+        data.priority in ['Routine', 'High', 'Urgent'] &&
+        isStr(data.dueDate, 4, 30) &&
+        (!('assignedRole' in data) || isStr(data.assignedRole, 0, 60)) &&
+        data.status in ['Pending', 'Scheduled', 'In Progress', 'Overdue', 'Missed', 'Completed', 'Escalated'] &&
+        (!('resolutionNotes' in data) || isStr(data.resolutionNotes, 0, 400)) &&
+        (!('missedCount' in data) || (data.missedCount is number && data.missedCount >= 0 && data.missedCount <= 100)) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidAuthUids(data.authorizedUids) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /followUpTasks/{taskId} {
+      allow get: if isSignedIn() && isValidId(taskId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isSignedIn() && isAuthorizedRecord(existing());
+      allow create: if isSignedIn() && isValidId(taskId) && isValidFollowUpTask(incoming()) &&
+        incoming().id == taskId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
+      allow update: if isSignedIn() && isValidId(taskId) && isValidFollowUpTask(incoming()) &&
+        incoming().id == existing().id && incoming().screeningId == existing().screeningId &&
+        incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['priority', 'dueDate', 'assignedRole', 'status', 'resolutionNotes', 'missedCount', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(taskId);
+    }
+
+    // 8. Referrals & NHIE Exchange
+    function isValidReferral(data) {
+      return data.keys().hasAll(['id', 'patientId', 'patientName', 'fromFacilityId', 'toFacilityId', 'specialty', 'urgency', 'reason', 'status', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'patientId', 'patientName', 'patientUid', 'fromFacilityId', 'fromFacilityName', 'toFacilityId', 'toFacilityName', 'specialty', 'urgency', 'reason', 'fhirResourceType', 'exchangeAuthorized', 'status', 'appointmentDate', 'isSynthetic', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.patientId) &&
+        isStr(data.patientName, 2, 160) &&
+        (!('patientUid' in data) || isStr(data.patientUid, 0, 60)) &&
+        isValidId(data.fromFacilityId) &&
+        (!('fromFacilityName' in data) || isStr(data.fromFacilityName, 0, 160)) &&
+        isValidId(data.toFacilityId) &&
+        (!('toFacilityName' in data) || isStr(data.toFacilityName, 0, 160)) &&
+        isStr(data.specialty, 2, 100) &&
+        data.urgency in ['Routine', 'Urgent', 'Emergency'] &&
+        isStr(data.reason, 2, 400) &&
+        (!('fhirResourceType' in data) || isStr(data.fhirResourceType, 0, 60)) &&
+        (!('exchangeAuthorized' in data) || data.exchangeAuthorized is bool) &&
+        data.status in ['Pending', 'Accepted', 'Appointment Scheduled', 'Completed', 'Declined'] &&
+        (!('appointmentDate' in data) || isStr(data.appointmentDate, 0, 30)) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidAuthUids(data.authorizedUids) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /referrals/{referralId} {
+      allow get: if isSignedIn() && isValidId(referralId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isSignedIn() && isAuthorizedRecord(existing());
+      allow create: if isSignedIn() && isValidId(referralId) && isValidReferral(incoming()) &&
+        incoming().id == referralId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
+      allow update: if isSignedIn() && isValidId(referralId) && isValidReferral(incoming()) &&
+        incoming().id == existing().id && incoming().patientId == existing().patientId &&
+        incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['exchangeAuthorized', 'status', 'appointmentDate', 'authorizedUids', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(referralId);
+    }
+
+    // 9. Laboratory Orders
+    function isValidLabOrder(data) {
+      return data.keys().hasAll(['id', 'patientId', 'patientName', 'facilityId', 'testName', 'sampleCode', 'status', 'abnormalFlag', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'patientId', 'patientName', 'patientUid', 'facilityId', 'facilityName', 'testName', 'sampleCode', 'sampleStatus', 'resultValue', 'referenceRange', 'abnormalFlag', 'status', 'approvedBy', 'isSynthetic', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.patientId) &&
+        isStr(data.patientName, 2, 160) &&
+        (!('patientUid' in data) || isStr(data.patientUid, 0, 60)) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isStr(data.testName, 2, 140) &&
+        isStr(data.sampleCode, 2, 60) &&
+        (!('sampleStatus' in data) || isStr(data.sampleStatus, 0, 40)) &&
+        (!('resultValue' in data) || isStr(data.resultValue, 0, 160)) &&
+        (!('referenceRange' in data) || isStr(data.referenceRange, 0, 120)) &&
+        data.abnormalFlag is bool &&
+        data.status in ['Requested', 'Sample Collected', 'Processing', 'Results Entered', 'Approved'] &&
+        (!('approvedBy' in data) || isStr(data.approvedBy, 0, 120)) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidAuthUids(data.authorizedUids) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /labOrders/{orderId} {
+      allow get: if isSignedIn() && isValidId(orderId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isSignedIn() && isAuthorizedRecord(existing());
+      allow create: if isSignedIn() && isValidId(orderId) && isValidLabOrder(incoming()) &&
+        incoming().id == orderId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
+      allow update: if isSignedIn() && isValidId(orderId) && isValidLabOrder(incoming()) &&
+        incoming().id == existing().id && incoming().patientId == existing().patientId &&
+        incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || (isAuthorizedRecord(existing()) && existing().status != 'Approved')) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['sampleStatus', 'resultValue', 'referenceRange', 'abnormalFlag', 'status', 'approvedBy', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(orderId);
+    }
+
+    // 10. Pharmacy Medicines
+    function isValidMedicine(data) {
+      return data.keys().hasAll(['id', 'facilityId', 'name', 'batchNumber', 'expiryDate', 'stockQuantity', 'reorderLevel', 'unit', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'facilityId', 'facilityName', 'name', 'genericName', 'category', 'batchNumber', 'expiryDate', 'stockQuantity', 'reorderLevel', 'unitPrice', 'unit', 'isSynthetic', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isStr(data.name, 2, 160) &&
+        (!('genericName' in data) || isStr(data.genericName, 0, 160)) &&
+        (!('category' in data) || isStr(data.category, 0, 80)) &&
+        isStr(data.batchNumber, 2, 60) &&
+        isStr(data.expiryDate, 4, 30) &&
+        data.stockQuantity is number && data.stockQuantity >= 0 && data.stockQuantity <= 10000000 &&
+        data.reorderLevel is number && data.reorderLevel >= 0 && data.reorderLevel <= 1000000 &&
+        (!('unitPrice' in data) || (data.unitPrice is number && data.unitPrice >= 0 && data.unitPrice <= 10000000)) &&
+        isStr(data.unit, 1, 30) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /medicines/{medicineId} {
+      allow get: if isSignedIn() && isValidId(medicineId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow create: if isSignedIn() && isValidId(medicineId) && isValidMedicine(incoming()) &&
+        incoming().id == medicineId && incoming().createdByUid == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(medicineId) && isValidMedicine(incoming()) &&
+        incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || existing().createdByUid == request.auth.uid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['stockQuantity', 'reorderLevel', 'batchNumber', 'expiryDate', 'unitPrice', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(medicineId);
+    }
+
+    // 11. Prescriptions
+    function isValidPrescription(data) {
+      return data.keys().hasAll(['id', 'patientId', 'patientName', 'facilityId', 'medicineId', 'medicineName', 'quantity', 'status', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'patientId', 'patientName', 'patientUid', 'facilityId', 'facilityName', 'medicineId', 'medicineName', 'dosage', 'frequency', 'quantity', 'prescribedBy', 'status', 'dispensedBy', 'isSynthetic', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.patientId) &&
+        isStr(data.patientName, 2, 160) &&
+        (!('patientUid' in data) || isStr(data.patientUid, 0, 60)) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isValidId(data.medicineId) &&
+        isStr(data.medicineName, 2, 160) &&
+        (!('dosage' in data) || isStr(data.dosage, 0, 120)) &&
+        (!('frequency' in data) || isStr(data.frequency, 0, 120)) &&
+        data.quantity is number && data.quantity >= 1 && data.quantity <= 10000 &&
+        (!('prescribedBy' in data) || isStr(data.prescribedBy, 0, 140)) &&
+        data.status in ['Pending', 'Dispensed', 'Cancelled'] &&
+        (!('dispensedBy' in data) || isStr(data.dispensedBy, 0, 140)) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidAuthUids(data.authorizedUids) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /prescriptions/{prescriptionId} {
+      allow get: if isSignedIn() && isValidId(prescriptionId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isSignedIn() && isAuthorizedRecord(existing());
+      allow create: if isSignedIn() && isValidId(prescriptionId) && isValidPrescription(incoming()) &&
+        incoming().id == prescriptionId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
+      allow update: if isSignedIn() && isValidId(prescriptionId) && isValidPrescription(incoming()) &&
+        incoming().id == existing().id && incoming().patientId == existing().patientId &&
+        incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || (isAuthorizedRecord(existing()) && existing().status == 'Pending')) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'dispensedBy', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(prescriptionId);
+    }
+
+    // 12. Blood Donors
+    function isValidBloodDonor(data) {
+      return data.keys().hasAll(['id', 'facilityId', 'donorName', 'bloodGroup', 'district', 'eligibilityStatus', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'facilityId', 'facilityName', 'donorName', 'bloodGroup', 'phone', 'district', 'lastDonationDate', 'eligibilityStatus', 'unitsDonated', 'isSynthetic', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isStr(data.donorName, 2, 160) &&
+        data.bloodGroup in ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'] &&
+        (!('phone' in data) || isStr(data.phone, 0, 40)) &&
+        isStr(data.district, 2, 80) &&
+        (!('lastDonationDate' in data) || isStr(data.lastDonationDate, 0, 30)) &&
+        data.eligibilityStatus in ['Eligible', 'Deferred', 'Temporary Deferral'] &&
+        (!('unitsDonated' in data) || (data.unitsDonated is number && data.unitsDonated >= 0 && data.unitsDonated <= 500)) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidAuthUids(data.authorizedUids) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /bloodDonors/{donorId} {
+      allow get: if isSignedIn() && isValidId(donorId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isSignedIn() && isAuthorizedRecord(existing());
+      allow create: if isSignedIn() && isValidId(donorId) && isValidBloodDonor(incoming()) &&
+        incoming().id == donorId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
+      allow update: if isSignedIn() && isValidId(donorId) && isValidBloodDonor(incoming()) &&
+        incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['lastDonationDate', 'eligibilityStatus', 'unitsDonated', 'phone', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(donorId);
+    }
+
+    // 13. Blood Inventory Units
+    function isValidBloodUnit(data) {
+      return data.keys().hasAll(['id', 'facilityId', 'unitCode', 'bloodGroup', 'componentType', 'expiryDate', 'status', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'facilityId', 'facilityName', 'unitCode', 'bloodGroup', 'componentType', 'collectionDate', 'expiryDate', 'status', 'crossMatchPatientName', 'isSynthetic', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isStr(data.unitCode, 2, 60) &&
+        data.bloodGroup in ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'] &&
+        isStr(data.componentType, 2, 60) &&
+        (!('collectionDate' in data) || isStr(data.collectionDate, 0, 30)) &&
+        isStr(data.expiryDate, 4, 30) &&
+        data.status in ['Available', 'Cross-Matched', 'Issued', 'Expired', 'Quarantined'] &&
+        (!('crossMatchPatientName' in data) || isStr(data.crossMatchPatientName, 0, 160)) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /bloodInventory/{unitId} {
+      allow get: if isSignedIn() && isValidId(unitId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow create: if isSignedIn() && isValidId(unitId) && isValidBloodUnit(incoming()) &&
+        incoming().id == unitId && incoming().createdByUid == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(unitId) && isValidBloodUnit(incoming()) &&
+        incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || existing().createdByUid == request.auth.uid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'crossMatchPatientName', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(unitId);
+    }
+
+    // 14. Insurance Claims & Billing
+    function isValidInsuranceClaim(data) {
+      return data.keys().hasAll(['id', 'facilityId', 'patientId', 'patientName', 'providerName', 'serviceDescription', 'amountSLL', 'status', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'facilityId', 'facilityName', 'patientId', 'patientName', 'patientUid', 'providerName', 'policyNumber', 'serviceDescription', 'amountSLL', 'status', 'paymentReference', 'isSynthetic', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isValidId(data.patientId) &&
+        isStr(data.patientName, 2, 160) &&
+        (!('patientUid' in data) || isStr(data.patientUid, 0, 60)) &&
+        isStr(data.providerName, 2, 120) &&
+        (!('policyNumber' in data) || isStr(data.policyNumber, 0, 80)) &&
+        isStr(data.serviceDescription, 2, 240) &&
+        data.amountSLL is number && data.amountSLL >= 0 && data.amountSLL <= 1000000000 &&
+        data.status in ['Draft', 'Submitted', 'Approved', 'Rejected', 'Paid'] &&
+        (!('paymentReference' in data) || isStr(data.paymentReference, 0, 80)) &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidAuthUids(data.authorizedUids) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /insuranceClaims/{claimId} {
+      allow get: if isSignedIn() && isValidId(claimId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isSignedIn() && isAuthorizedRecord(existing());
+      allow create: if isSignedIn() && isValidId(claimId) && isValidInsuranceClaim(incoming()) &&
+        incoming().id == claimId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
+      allow update: if isSignedIn() && isValidId(claimId) && isValidInsuranceClaim(incoming()) &&
+        incoming().id == existing().id && incoming().patientId == existing().patientId &&
+        incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || (isAuthorizedRecord(existing()) && existing().status != 'Paid')) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentReference', 'amountSLL', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(claimId);
+    }
+
+    // 15. Telemedicine Appointments
+    function isValidTelemedicine(data) {
+      return data.keys().hasAll(['id', 'facilityId', 'patientId', 'patientName', 'doctorName', 'scheduledDate', 'scheduledTime', 'status', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'facilityId', 'facilityName', 'patientId', 'patientName', 'patientUid', 'doctorName', 'specialty', 'scheduledDate', 'scheduledTime', 'consultationNotes', 'integrationEndpointStatus', 'status', 'isSynthetic', 'authorizedUids', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isValidId(data.patientId) &&
+        isStr(data.patientName, 2, 160) &&
+        (!('patientUid' in data) || isStr(data.patientUid, 0, 60)) &&
+        isStr(data.doctorName, 2, 140) &&
+        (!('specialty' in data) || isStr(data.specialty, 0, 100)) &&
+        isStr(data.scheduledDate, 4, 30) &&
+        isStr(data.scheduledTime, 2, 20) &&
+        (!('consultationNotes' in data) || isStr(data.consultationNotes, 0, 600)) &&
+        (!('integrationEndpointStatus' in data) || isStr(data.integrationEndpointStatus, 0, 80)) &&
+        data.status in ['Scheduled', 'Ready', 'Completed', 'Cancelled'] &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidAuthUids(data.authorizedUids) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /telemedicineAppointments/{appointmentId} {
+      allow get: if isSignedIn() && isValidId(appointmentId) && (isAdmin() || isAuthorizedRecord(existing()));
+      allow list: if isSignedIn() && isAuthorizedRecord(existing());
+      allow create: if isSignedIn() && isValidId(appointmentId) && isValidTelemedicine(incoming()) &&
+        incoming().id == appointmentId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
+      allow update: if isSignedIn() && isValidId(appointmentId) && isValidTelemedicine(incoming()) &&
+        incoming().id == existing().id && incoming().patientId == existing().patientId &&
+        incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['scheduledDate', 'scheduledTime', 'consultationNotes', 'status', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(appointmentId);
+    }
+
+    // 16. Surveillance Records (Aggregate De-Identified Population Data)
+    function isValidSurveillanceRecord(data) {
+      return data.keys().hasAll(['id', 'facilityId', 'district', 'condition', 'periodType', 'periodLabel', 'reportedCases', 'baselineCases', 'isAggregate', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'facilityId', 'facilityName', 'district', 'condition', 'periodType', 'periodLabel', 'reportedCases', 'baselineCases', 'workforceAbsenteeismPct', 'screeningCoveragePct', 'climateFactor', 'isAggregate', 'isSynthetic', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.facilityId) &&
+        (!('facilityName' in data) || isStr(data.facilityName, 0, 160)) &&
+        isStr(data.district, 2, 80) &&
+        isStr(data.condition, 2, 100) &&
+        data.periodType in ['Daily', 'Weekly', 'Monthly'] &&
+        isStr(data.periodLabel, 2, 40) &&
+        data.reportedCases is number && data.reportedCases >= 0 && data.reportedCases <= 1000000 &&
+        data.baselineCases is number && data.baselineCases >= 0 && data.baselineCases <= 1000000 &&
+        (!('workforceAbsenteeismPct' in data) || (data.workforceAbsenteeismPct is number && data.workforceAbsenteeismPct >= 0 && data.workforceAbsenteeismPct <= 100)) &&
+        (!('screeningCoveragePct' in data) || (data.screeningCoveragePct is number && data.screeningCoveragePct >= 0 && data.screeningCoveragePct <= 100)) &&
+        (!('climateFactor' in data) || isStr(data.climateFactor, 0, 120)) &&
+        data.isAggregate == true &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /surveillanceRecords/{recordId} {
+      allow get: if isSignedIn() && isValidId(recordId) && (isAdmin() || existing().isAggregate == true);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().isAggregate == true);
+      allow create: if isSignedIn() && isValidId(recordId) && isValidSurveillanceRecord(incoming()) &&
+        incoming().id == recordId && incoming().createdByUid == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(recordId) && isValidSurveillanceRecord(incoming()) &&
+        incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || existing().createdByUid == request.auth.uid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['reportedCases', 'baselineCases', 'workforceAbsenteeismPct', 'screeningCoveragePct', 'climateFactor', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(recordId);
+    }
+
+    // 17. Public Health Alerts
+    function isValidPublicHealthAlert(data) {
+      return data.keys().hasAll(['id', 'referenceNumber', 'condition', 'district', 'reportedCases', 'baselineCases', 'severity', 'verificationStatus', 'triggerRule', 'recommendedResponse', 'isAggregate', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'referenceNumber', 'condition', 'district', 'community', 'reportingFacilities', 'reportedCases', 'baselineCases', 'percentageChange', 'severity', 'verificationStatus', 'triggerRule', 'recommendedResponse', 'assignedOfficer', 'resolutionNotes', 'isAggregate', 'isSynthetic', 'createdByUid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isStr(data.referenceNumber, 4, 60) &&
+        isStr(data.condition, 2, 100) &&
+        isStr(data.district, 2, 80) &&
+        (!('community' in data) || isStr(data.community, 0, 120)) &&
+        (!('reportingFacilities' in data) || isValidStringList(data.reportingFacilities, 25)) &&
+        data.reportedCases is number && data.reportedCases >= 0 && data.reportedCases <= 1000000 &&
+        data.baselineCases is number && data.baselineCases >= 0 && data.baselineCases <= 1000000 &&
+        (!('percentageChange' in data) || (data.percentageChange is number && data.percentageChange >= -100 && data.percentageChange <= 100000)) &&
+        data.severity in ['Informational', 'Low', 'Moderate', 'High', 'Critical'] &&
+        data.verificationStatus in ['Pending Verification', 'Acknowledged', 'Under Investigation', 'Escalated', 'Resolved', 'Dismissed'] &&
+        isStr(data.triggerRule, 2, 300) &&
+        isStr(data.recommendedResponse, 2, 400) &&
+        (!('assignedOfficer' in data) || isStr(data.assignedOfficer, 0, 140)) &&
+        (!('resolutionNotes' in data) || isStr(data.resolutionNotes, 0, 400)) &&
+        data.isAggregate == true &&
+        (!('isSynthetic' in data) || data.isSynthetic is bool) &&
+        isValidId(data.createdByUid) &&
+        isStr(data.createdAt, 10, 50) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /publicHealthAlerts/{alertId} {
+      allow get: if isSignedIn() && isValidId(alertId) && (isAdmin() || existing().isAggregate == true);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().isAggregate == true);
+      allow create: if isSignedIn() && isValidId(alertId) && isValidPublicHealthAlert(incoming()) &&
+        incoming().id == alertId && incoming().createdByUid == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(alertId) && isValidPublicHealthAlert(incoming()) &&
+        incoming().id == existing().id && incoming().referenceNumber == existing().referenceNumber &&
+        incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
+        (isAdmin() || (existing().isAggregate == true && existing().verificationStatus != 'Resolved')) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['verificationStatus', 'assignedOfficer', 'resolutionNotes', 'severity', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(alertId);
+    }
+
+    // 18. Audit Logs (Append-Only)
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['id', 'actorUid', 'actorEmail', 'actorRole', 'action', 'resourceType', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'actorUid', 'actorEmail', 'actorRole', 'facilityId', 'action', 'resourceType', 'resourceId', 'details', 'createdAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.actorUid) &&
+        isStr(data.actorEmail, 3, 200) &&
+        isStr(data.actorRole, 2, 60) &&
+        (!('facilityId' in data) || isStr(data.facilityId, 0, 128)) &&
+        isStr(data.action, 2, 100) &&
+        isStr(data.resourceType, 2, 80) &&
+        (!('resourceId' in data) || isStr(data.resourceId, 0, 128)) &&
+        (!('details' in data) || isStr(data.details, 0, 500)) &&
+        isStr(data.createdAt, 10, 50);
+    }
+
+    match /auditLogs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && (isAdmin() || existing().actorUid == request.auth.uid);
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().actorUid == request.auth.uid);
+      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming()) &&
+        incoming().id == logId && incoming().actorUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // 19. Platform Settings
+    function isValidPlatformSettings(data) {
+      return data.keys().hasAll(['id', 'malariaThresholdPct', 'respiratoryThresholdPct', 'diarrhoealThresholdPct', 'absenteeismThresholdPct', 'screeningCoverageMinPct', 'sessionTimeoutMinutes', 'updatedByUid', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'malariaThresholdPct', 'respiratoryThresholdPct', 'diarrhoealThresholdPct', 'absenteeismThresholdPct', 'screeningCoverageMinPct', 'sessionTimeoutMinutes', 'backupSchedule', 'updatedByUid', 'updatedAt']) &&
+        isValidId(data.id) &&
+        data.malariaThresholdPct is number && data.malariaThresholdPct >= 5 && data.malariaThresholdPct <= 500 &&
+        data.respiratoryThresholdPct is number && data.respiratoryThresholdPct >= 5 && data.respiratoryThresholdPct <= 500 &&
+        data.diarrhoealThresholdPct is number && data.diarrhoealThresholdPct >= 5 && data.diarrhoealThresholdPct <= 500 &&
+        data.absenteeismThresholdPct is number && data.absenteeismThresholdPct >= 1 && data.absenteeismThresholdPct <= 100 &&
+        data.screeningCoverageMinPct is number && data.screeningCoverageMinPct >= 5 && data.screeningCoverageMinPct <= 100 &&
+        data.sessionTimeoutMinutes is number && data.sessionTimeoutMinutes >= 5 && data.sessionTimeoutMinutes <= 480 &&
+        (!('backupSchedule' in data) || isStr(data.backupSchedule, 0, 100)) &&
+        isValidId(data.updatedByUid) &&
+        isStr(data.updatedAt, 10, 50);
+    }
+
+    match /platformSettings/{settingId} {
+      allow get: if isSignedIn() && isValidId(settingId) && (isAdmin() || settingId == 'global');
+      allow list: if isSignedIn() && (isBootstrappedAdmin() || existing().id == 'global');
+      allow create, update: if isSignedIn() && isValidId(settingId) && isValidPlatformSettings(incoming()) &&
+        incoming().id == settingId && incoming().updatedByUid == request.auth.uid && isAdmin();
+      allow delete: if false;
+    }
+  }
+}

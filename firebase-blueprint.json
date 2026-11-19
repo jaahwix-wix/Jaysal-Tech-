@@ -1,0 +1,556 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authorized healthcare staff profile with facility scope and RBAC role assignment.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "maxLength": 60 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "department": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "maxLength": 30 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "facilityId", "status", "createdAt", "updatedAt"]
+    },
+    "Facility": {
+      "title": "Facility",
+      "description": "Registered hospital, clinic, or diagnostic centre on the central hub.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 160 },
+        "code": { "type": "string", "maxLength": 40 },
+        "type": { "type": "string", "maxLength": 60 },
+        "district": { "type": "string", "maxLength": 80 },
+        "chiefdom": { "type": "string", "maxLength": 100 },
+        "address": { "type": "string", "maxLength": 240 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "maxLength": 30 },
+        "bedCapacity": { "type": "number" },
+        "departments": { "type": "array" },
+        "isSynthetic": { "type": "boolean" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "code", "type", "district", "status", "bedCapacity", "departments", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "Patient": {
+      "title": "Patient",
+      "description": "Registered patient demographics, clinical history, and facility isolation scope.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "patientUid": { "type": "string", "maxLength": 60 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "fullName": { "type": "string", "maxLength": 160 },
+        "dateOfBirth": { "type": "string", "maxLength": 20 },
+        "gender": { "type": "string", "maxLength": 20 },
+        "district": { "type": "string", "maxLength": 80 },
+        "chiefdom": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "emergencyContactName": { "type": "string", "maxLength": 140 },
+        "emergencyContactPhone": { "type": "string", "maxLength": 40 },
+        "bloodGroup": { "type": "string", "maxLength": 10 },
+        "allergies": { "type": "string", "maxLength": 300 },
+        "chronicConditions": { "type": "string", "maxLength": 300 },
+        "insuranceProvider": { "type": "string", "maxLength": 120 },
+        "insuranceNumber": { "type": "string", "maxLength": 80 },
+        "isSynthetic": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "patientUid", "facilityId", "fullName", "dateOfBirth", "gender", "district", "authorizedUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "Encounter": {
+      "title": "Encounter",
+      "description": "Outpatient or inpatient clinical consultation, vitals, diagnosis, and discharge summary.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 160 },
+        "patientUid": { "type": "string", "maxLength": 60 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "encounterType": { "type": "string", "maxLength": 40 },
+        "department": { "type": "string", "maxLength": 100 },
+        "clinicianName": { "type": "string", "maxLength": 140 },
+        "chiefComplaint": { "type": "string", "maxLength": 400 },
+        "vitalSigns": { "type": "string", "maxLength": 300 },
+        "nursingNotes": { "type": "string", "maxLength": 600 },
+        "diagnosis": { "type": "string", "maxLength": 300 },
+        "treatmentPlan": { "type": "string", "maxLength": 600 },
+        "dischargeSummary": { "type": "string", "maxLength": 600 },
+        "status": { "type": "string", "maxLength": 40 },
+        "wardBed": { "type": "string", "maxLength": 60 },
+        "isSynthetic": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "patientId", "patientName", "facilityId", "encounterType", "department", "clinicianName", "chiefComplaint", "status", "authorizedUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "ScreeningCampaign": {
+      "title": "ScreeningCampaign",
+      "description": "Organized population or facility screening campaign.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 180 },
+        "district": { "type": "string", "maxLength": 80 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "targetCondition": { "type": "string", "maxLength": 100 },
+        "targetCount": { "type": "number" },
+        "screenedCount": { "type": "number" },
+        "startDate": { "type": "string", "maxLength": 30 },
+        "endDate": { "type": "string", "maxLength": 30 },
+        "status": { "type": "string", "maxLength": 30 },
+        "isSynthetic": { "type": "boolean" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "district", "facilityId", "targetCondition", "targetCount", "screenedCount", "status", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "ScreeningRecord": {
+      "title": "ScreeningRecord",
+      "description": "Individual patient screening event and 8-stage Screening-to-Care journey.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "campaignId": { "type": "string", "maxLength": 128 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 160 },
+        "patientUid": { "type": "string", "maxLength": 60 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "district": { "type": "string", "maxLength": 80 },
+        "screeningType": { "type": "string", "maxLength": 100 },
+        "measurementSummary": { "type": "string", "maxLength": 240 },
+        "resultClassification": { "type": "string", "maxLength": 40 },
+        "riskLevel": { "type": "string", "maxLength": 40 },
+        "journeyStage": { "type": "string", "maxLength": 60 },
+        "referralId": { "type": "string", "maxLength": 128 },
+        "appointmentDate": { "type": "string", "maxLength": 30 },
+        "treatmentStatus": { "type": "string", "maxLength": 80 },
+        "clinicianDecision": { "type": "string", "maxLength": 400 },
+        "followUpCompleted": { "type": "boolean" },
+        "isOverdue": { "type": "boolean" },
+        "isSynthetic": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "patientId", "patientName", "facilityId", "district", "screeningType", "resultClassification", "riskLevel", "journeyStage", "followUpCompleted", "authorizedUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "FollowUpTask": {
+      "title": "FollowUpTask",
+      "description": "Automatic or manual follow-up task ensuring abnormal screenings close the loop.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "screeningId": { "type": "string", "maxLength": 128 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 160 },
+        "patientUid": { "type": "string", "maxLength": 60 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "district": { "type": "string", "maxLength": 80 },
+        "taskTitle": { "type": "string", "maxLength": 200 },
+        "priority": { "type": "string", "maxLength": 30 },
+        "dueDate": { "type": "string", "maxLength": 30 },
+        "assignedRole": { "type": "string", "maxLength": 60 },
+        "status": { "type": "string", "maxLength": 40 },
+        "resolutionNotes": { "type": "string", "maxLength": 400 },
+        "missedCount": { "type": "number" },
+        "isSynthetic": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "screeningId", "patientId", "patientName", "facilityId", "taskTitle", "priority", "dueDate", "status", "authorizedUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "Referral": {
+      "title": "Referral",
+      "description": "Facility-to-facility and specialist referral record with NHIE exchange authorization.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 160 },
+        "patientUid": { "type": "string", "maxLength": 60 },
+        "fromFacilityId": { "type": "string", "maxLength": 128 },
+        "fromFacilityName": { "type": "string", "maxLength": 160 },
+        "toFacilityId": { "type": "string", "maxLength": 128 },
+        "toFacilityName": { "type": "string", "maxLength": 160 },
+        "specialty": { "type": "string", "maxLength": 100 },
+        "urgency": { "type": "string", "maxLength": 30 },
+        "reason": { "type": "string", "maxLength": 400 },
+        "fhirResourceType": { "type": "string", "maxLength": 60 },
+        "exchangeAuthorized": { "type": "boolean" },
+        "status": { "type": "string", "maxLength": 40 },
+        "appointmentDate": { "type": "string", "maxLength": 30 },
+        "isSynthetic": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "patientId", "patientName", "fromFacilityId", "toFacilityId", "specialty", "urgency", "reason", "status", "authorizedUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "LabOrder": {
+      "title": "LabOrder",
+      "description": "Laboratory test order, sample status, results entry, and abnormal flagging.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 160 },
+        "patientUid": { "type": "string", "maxLength": 60 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "testName": { "type": "string", "maxLength": 140 },
+        "sampleCode": { "type": "string", "maxLength": 60 },
+        "sampleStatus": { "type": "string", "maxLength": 40 },
+        "resultValue": { "type": "string", "maxLength": 160 },
+        "referenceRange": { "type": "string", "maxLength": 120 },
+        "abnormalFlag": { "type": "boolean" },
+        "status": { "type": "string", "maxLength": 40 },
+        "approvedBy": { "type": "string", "maxLength": 120 },
+        "isSynthetic": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "patientId", "patientName", "facilityId", "testName", "sampleCode", "status", "abnormalFlag", "authorizedUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "Medicine": {
+      "title": "Medicine",
+      "description": "Pharmacy stock inventory item with batch, expiry, and reorder alerts.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "name": { "type": "string", "maxLength": 160 },
+        "genericName": { "type": "string", "maxLength": 160 },
+        "category": { "type": "string", "maxLength": 80 },
+        "batchNumber": { "type": "string", "maxLength": 60 },
+        "expiryDate": { "type": "string", "maxLength": 30 },
+        "stockQuantity": { "type": "number" },
+        "reorderLevel": { "type": "number" },
+        "unitPrice": { "type": "number" },
+        "unit": { "type": "string", "maxLength": 30 },
+        "isSynthetic": { "type": "boolean" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "facilityId", "name", "batchNumber", "expiryDate", "stockQuantity", "reorderLevel", "unit", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "Prescription": {
+      "title": "Prescription",
+      "description": "Patient medication order and pharmacy dispensing record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 160 },
+        "patientUid": { "type": "string", "maxLength": 60 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "medicineId": { "type": "string", "maxLength": 128 },
+        "medicineName": { "type": "string", "maxLength": 160 },
+        "dosage": { "type": "string", "maxLength": 120 },
+        "frequency": { "type": "string", "maxLength": 120 },
+        "quantity": { "type": "number" },
+        "prescribedBy": { "type": "string", "maxLength": 140 },
+        "status": { "type": "string", "maxLength": 40 },
+        "dispensedBy": { "type": "string", "maxLength": 140 },
+        "isSynthetic": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "patientId", "patientName", "facilityId", "medicineId", "medicineName", "quantity", "status", "authorizedUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "BloodDonor": {
+      "title": "BloodDonor",
+      "description": "Registered voluntary blood donor and eligibility profile.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "donorName": { "type": "string", "maxLength": 160 },
+        "bloodGroup": { "type": "string", "maxLength": 10 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "district": { "type": "string", "maxLength": 80 },
+        "lastDonationDate": { "type": "string", "maxLength": 30 },
+        "eligibilityStatus": { "type": "string", "maxLength": 40 },
+        "unitsDonated": { "type": "number" },
+        "isSynthetic": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "facilityId", "donorName", "bloodGroup", "district", "eligibilityStatus", "authorizedUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "BloodUnit": {
+      "title": "BloodUnit",
+      "description": "Blood bank inventory unit, expiry tracking, cross-matching, and transfusion issue.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "unitCode": { "type": "string", "maxLength": 60 },
+        "bloodGroup": { "type": "string", "maxLength": 10 },
+        "componentType": { "type": "string", "maxLength": 60 },
+        "collectionDate": { "type": "string", "maxLength": 30 },
+        "expiryDate": { "type": "string", "maxLength": 30 },
+        "status": { "type": "string", "maxLength": 40 },
+        "crossMatchPatientName": { "type": "string", "maxLength": 160 },
+        "isSynthetic": { "type": "boolean" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "facilityId", "unitCode", "bloodGroup", "componentType", "expiryDate", "status", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "InsuranceClaim": {
+      "title": "InsuranceClaim",
+      "description": "Hospital billing, insurance claim submission, adjudication, and payment tracking.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 160 },
+        "patientUid": { "type": "string", "maxLength": 60 },
+        "providerName": { "type": "string", "maxLength": 120 },
+        "policyNumber": { "type": "string", "maxLength": 80 },
+        "serviceDescription": { "type": "string", "maxLength": 240 },
+        "amountSLL": { "type": "number" },
+        "status": { "type": "string", "maxLength": 40 },
+        "paymentReference": { "type": "string", "maxLength": 80 },
+        "isSynthetic": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "facilityId", "patientId", "patientName", "providerName", "serviceDescription", "amountSLL", "status", "authorizedUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "TelemedicineAppointment": {
+      "title": "TelemedicineAppointment",
+      "description": "Scheduled virtual consultation slot and clinical documentation record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 160 },
+        "patientUid": { "type": "string", "maxLength": 60 },
+        "doctorName": { "type": "string", "maxLength": 140 },
+        "specialty": { "type": "string", "maxLength": 100 },
+        "scheduledDate": { "type": "string", "maxLength": 30 },
+        "scheduledTime": { "type": "string", "maxLength": 20 },
+        "consultationNotes": { "type": "string", "maxLength": 600 },
+        "integrationEndpointStatus": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "maxLength": 40 },
+        "isSynthetic": { "type": "boolean" },
+        "authorizedUids": { "type": "array" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "facilityId", "patientId", "patientName", "doctorName", "scheduledDate", "scheduledTime", "status", "authorizedUids", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "SurveillanceRecord": {
+      "title": "SurveillanceRecord",
+      "description": "De-identified facility and district epidemiological surveillance aggregate.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "facilityName": { "type": "string", "maxLength": 160 },
+        "district": { "type": "string", "maxLength": 80 },
+        "condition": { "type": "string", "maxLength": 100 },
+        "periodType": { "type": "string", "maxLength": 20 },
+        "periodLabel": { "type": "string", "maxLength": 40 },
+        "reportedCases": { "type": "number" },
+        "baselineCases": { "type": "number" },
+        "workforceAbsenteeismPct": { "type": "number" },
+        "screeningCoveragePct": { "type": "number" },
+        "climateFactor": { "type": "string", "maxLength": 120 },
+        "isAggregate": { "type": "boolean" },
+        "isSynthetic": { "type": "boolean" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "facilityId", "district", "condition", "periodType", "periodLabel", "reportedCases", "baselineCases", "isAggregate", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "PublicHealthAlert": {
+      "title": "PublicHealthAlert",
+      "description": "Explainable early warning anomaly alert with verification lifecycle.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "referenceNumber": { "type": "string", "maxLength": 60 },
+        "condition": { "type": "string", "maxLength": 100 },
+        "district": { "type": "string", "maxLength": 80 },
+        "community": { "type": "string", "maxLength": 120 },
+        "reportingFacilities": { "type": "array" },
+        "reportedCases": { "type": "number" },
+        "baselineCases": { "type": "number" },
+        "percentageChange": { "type": "number" },
+        "severity": { "type": "string", "maxLength": 30 },
+        "verificationStatus": { "type": "string", "maxLength": 40 },
+        "triggerRule": { "type": "string", "maxLength": 300 },
+        "recommendedResponse": { "type": "string", "maxLength": 400 },
+        "assignedOfficer": { "type": "string", "maxLength": 140 },
+        "resolutionNotes": { "type": "string", "maxLength": 400 },
+        "isAggregate": { "type": "boolean" },
+        "isSynthetic": { "type": "boolean" },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "referenceNumber", "condition", "district", "reportedCases", "baselineCases", "severity", "verificationStatus", "triggerRule", "recommendedResponse", "isAggregate", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Append-only security, clinical access, and interoperability exchange audit entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "actorRole": { "type": "string", "maxLength": 60 },
+        "facilityId": { "type": "string", "maxLength": 128 },
+        "action": { "type": "string", "maxLength": 100 },
+        "resourceType": { "type": "string", "maxLength": 80 },
+        "resourceId": { "type": "string", "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "actorUid", "actorEmail", "actorRole", "action", "resourceType", "createdAt"]
+    },
+    "PlatformSettings": {
+      "title": "PlatformSettings",
+      "description": "Configurable early warning thresholds, session timeout, and backup configuration.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "malariaThresholdPct": { "type": "number" },
+        "respiratoryThresholdPct": { "type": "number" },
+        "diarrhoealThresholdPct": { "type": "number" },
+        "absenteeismThresholdPct": { "type": "number" },
+        "screeningCoverageMinPct": { "type": "number" },
+        "sessionTimeoutMinutes": { "type": "number" },
+        "backupSchedule": { "type": "string", "maxLength": 100 },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "malariaThresholdPct", "respiratoryThresholdPct", "diarrhoealThresholdPct", "absenteeismThresholdPct", "screeningCoverageMinPct", "sessionTimeoutMinutes", "updatedByUid", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Authenticated user profiles with RBAC role and facility scope."
+    },
+    "/facilities/{facilityId}": {
+      "schema": { "$ref": "#/entities/Facility" },
+      "description": "Healthcare facilities registered across Sierra Leone."
+    },
+    "/patients/{patientId}": {
+      "schema": { "$ref": "#/entities/Patient" },
+      "description": "Facility-isolated patient registry."
+    },
+    "/encounters/{encounterId}": {
+      "schema": { "$ref": "#/entities/Encounter" },
+      "description": "Clinical consultations, inpatient notes, and discharge summaries."
+    },
+    "/screeningCampaigns/{campaignId}": {
+      "schema": { "$ref": "#/entities/ScreeningCampaign" },
+      "description": "District and facility screening campaigns."
+    },
+    "/screenings/{screeningId}": {
+      "schema": { "$ref": "#/entities/ScreeningRecord" },
+      "description": "Patient screening records and 8-stage care loop tracking."
+    },
+    "/followUpTasks/{taskId}": {
+      "schema": { "$ref": "#/entities/FollowUpTask" },
+      "description": "Automated and clinician-managed follow-up tasks."
+    },
+    "/referrals/{referralId}": {
+      "schema": { "$ref": "#/entities/Referral" },
+      "description": "Inter-facility and specialist referrals."
+    },
+    "/labOrders/{orderId}": {
+      "schema": { "$ref": "#/entities/LabOrder" },
+      "description": "Laboratory test requests and results."
+    },
+    "/medicines/{medicineId}": {
+      "schema": { "$ref": "#/entities/Medicine" },
+      "description": "Pharmacy inventory and stock alerts."
+    },
+    "/prescriptions/{prescriptionId}": {
+      "schema": { "$ref": "#/entities/Prescription" },
+      "description": "Prescriptions and dispensing records."
+    },
+    "/bloodDonors/{donorId}": {
+      "schema": { "$ref": "#/entities/BloodDonor" },
+      "description": "Blood bank donors."
+    },
+    "/bloodInventory/{unitId}": {
+      "schema": { "$ref": "#/entities/BloodUnit" },
+      "description": "Blood bank inventory units."
+    },
+    "/insuranceClaims/{claimId}": {
+      "schema": { "$ref": "#/entities/InsuranceClaim" },
+      "description": "Billing and insurance claims."
+    },
+    "/telemedicineAppointments/{appointmentId}": {
+      "schema": { "$ref": "#/entities/TelemedicineAppointment" },
+      "description": "Virtual consultation scheduling."
+    },
+    "/surveillanceRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/SurveillanceRecord" },
+      "description": "De-identified facility and district epidemiological aggregates."
+    },
+    "/publicHealthAlerts/{alertId}": {
+      "schema": { "$ref": "#/entities/PublicHealthAlert" },
+      "description": "Population and workforce early warning alerts."
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Security and interoperability audit logs."
+    },
+    "/platformSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/PlatformSettings" },
+      "description": "Platform surveillance and security settings."
+    }
+  }
+}

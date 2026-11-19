@@ -1,0 +1,6 @@
+{
+  "name": "JaysalTech Central Hospital Hub",
+  "description": "Cloud-based multi-hospital management, screening-to-care tracking, and population health early warning platform for Sierra Leone and international healthcare networks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
