@@ -567,9 +567,8 @@ export default function App() {
 
         <div className="lg:col-span-6 relative bg-slate-900 hidden lg:block overflow-hidden">
           <img
-            src="/src/assets/images/hospital_campus_hero_1795084255241.jpg"
-            alt="Modern West African regional hospital campus"
-            referrerPolicy="no-referrer"
+            src="/assets/aistudio/202210_sierraleone_slpth_scharles_23337_2d92a9b3.jpg"
+            alt="Sierra Leone hospital inpatient ward"
             className="w-full h-full object-cover opacity-85"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-900/35 to-transparent flex flex-col justify-end p-12 text-white">
