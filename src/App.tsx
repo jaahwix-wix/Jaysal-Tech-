@@ -26,6 +26,8 @@ import {
   ArrowLeftRight,
   Bell,
   Building2,
+  Check,
+  Copy,
   CreditCard,
   Droplet,
   FlaskConical,
@@ -108,6 +110,8 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [simulatedRole, setSimulatedRole] = useState<UserRole | null>(null);
   const [authError, setAuthError] = useState('');
+  const [unauthorizedDomain, setUnauthorizedDomain] = useState('');
+  const [copiedDomain, setCopiedDomain] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
 
   const [activeModule, setActiveModule] = useState<ModuleKey>('overview');
@@ -360,12 +364,35 @@ export default function App() {
   const handleSignIn = async () => {
     setSigningIn(true);
     setAuthError('');
+    setUnauthorizedDomain('');
+    setCopiedDomain(false);
     try {
       await signInWithPopup(auth, googleAuthProvider);
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Google Sign-In failed.');
+      const code = (err as { code?: string })?.code || '';
+      const message = err instanceof Error ? err.message : 'Google Sign-In failed.';
+      if (code === 'auth/unauthorized-domain' || message.includes('auth/unauthorized-domain')) {
+        const host = window.location.hostname || window.location.host;
+        setUnauthorizedDomain(host);
+        setAuthError(
+          `This deployed domain (${host}) is not authorized for Firebase Google Sign-In yet.`
+        );
+      } else {
+        setAuthError(message);
+      }
     } finally {
       setSigningIn(false);
+    }
+  };
+
+  const handleCopyDomain = async () => {
+    if (!unauthorizedDomain) return;
+    try {
+      await navigator.clipboard.writeText(unauthorizedDomain);
+      setCopiedDomain(true);
+      window.setTimeout(() => setCopiedDomain(false), 2500);
+    } catch {
+      // Clipboard API may be unavailable in restricted contexts
     }
   };
 
@@ -480,8 +507,37 @@ export default function App() {
             </div>
 
             {authError && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-800">
-                {authError}
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3.5 text-xs text-red-900 space-y-2.5">
+                <div className="font-semibold text-red-900">{authError}</div>
+                {unauthorizedDomain && (
+                  <div className="space-y-2 text-red-800">
+                    <p className="leading-relaxed">
+                      Add this exact hostname in <strong>Firebase Console (wise-lamp-h3bk6) → Authentication → Settings → Authorized domains</strong>:
+                    </p>
+                    <div className="flex items-center justify-between gap-2 bg-white border border-red-200 rounded-md px-2.5 py-1.5">
+                      <code className="text-[11px] font-mono text-slate-900 truncate">
+                        {unauthorizedDomain}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={handleCopyDomain}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium bg-slate-900 hover:bg-slate-800 text-white rounded shrink-0"
+                      >
+                        {copiedDomain ? (
+                          <>
+                            <Check className="w-3 h-3" />
+                            <span>Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            <span>Copy domain</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
