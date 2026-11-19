@@ -5,9 +5,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  createUserWithEmailAndPassword,
   onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  updateProfile,
   type User as FirebaseUser,
 } from 'firebase/auth';
 import {
@@ -30,15 +34,21 @@ import {
   Copy,
   CreditCard,
   Droplet,
+  Eye,
+  EyeOff,
   FlaskConical,
   GitBranch,
+  KeyRound,
   LayoutDashboard,
+  Lock,
   LogOut,
   Menu,
   Pill,
   Printer,
   Search,
   Stethoscope,
+  User,
+  UserPlus,
   Users,
   Video,
   X,
@@ -77,6 +87,7 @@ import {
   googleAuthProvider,
   handleFirestoreError,
   safeSetDoc,
+  safeUpdateDoc,
   testConnection,
 } from './lib/firebase';
 import { seedSyntheticSierraLeoneDataset } from './lib/seedData';
@@ -123,6 +134,69 @@ const NAV_ITEMS: { key: ModuleKey; label: string; icon: React.ComponentType<{ cl
 ];
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'jaahwix@gmail.com';
+const PENDING_LOGIN_STORAGE_KEY = 'jaysaltech_pending_login_selection';
+
+interface LoginHospitalOption {
+  id: string;
+  name: string;
+  code: string;
+  district: string;
+  type: string;
+}
+
+const LOGIN_HOSPITALS: LoginHospitalOption[] = [
+  {
+    id: 'fac_connaught_sl',
+    name: 'Connaught National Referral Hospital',
+    code: 'SL-WAU-001',
+    district: 'Western Area Urban',
+    type: 'Tertiary Referral Hospital',
+  },
+  {
+    id: 'fac_bo_gov',
+    name: 'Bo Government Regional Hospital',
+    code: 'SL-BO-002',
+    district: 'Bo',
+    type: 'Regional Hospital',
+  },
+  {
+    id: 'fac_kenema_gov',
+    name: 'Kenema Government Hospital',
+    code: 'SL-KEN-003',
+    district: 'Kenema',
+    type: 'Regional Hospital',
+  },
+  {
+    id: 'fac_makeni_reg',
+    name: 'Makeni Regional Hospital',
+    code: 'SL-BOM-004',
+    district: 'Bombali',
+    type: 'Regional Hospital',
+  },
+  {
+    id: 'fac_portloko_chc',
+    name: 'Port Loko District Diagnostic & Health Centre',
+    code: 'SL-PLK-005',
+    district: 'Port Loko',
+    type: 'Diagnostic & District Clinic',
+  },
+];
+
+interface PendingLoginSelection {
+  facilityId: string;
+  facilityName: string;
+  displayName?: string;
+  role?: UserRole;
+  department?: string;
+}
+
+function normalizeStaffIdentifier(raw: string): string {
+  const cleaned = raw.trim().toLowerCase();
+  if (!cleaned) return '';
+  if (cleaned.includes('@')) return cleaned;
+  const safeUser = cleaned.replace(/[^a-z0-9._-]/g, '.').replace(/\.+/g, '.').replace(/^\.+|\.+$/g, '');
+  return safeUser ? `${safeUser}@jaysaltech.sl` : '';
+}
 
 export default function App() {
   const [authReady, setAuthReady] = useState(false);
@@ -130,9 +204,23 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [simulatedRole, setSimulatedRole] = useState<UserRole | null>(null);
   const [authError, setAuthError] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
+  const [emailProviderDisabled, setEmailProviderDisabled] = useState(false);
   const [unauthorizedDomain, setUnauthorizedDomain] = useState('');
   const [copiedDomain, setCopiedDomain] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
+
+  // Portal login & hospital selection state
+  const [authMode, setAuthMode] = useState<'signin' | 'register'>('signin');
+  const [selectedHospitalId, setSelectedHospitalId] = useState<string>('');
+  const [customHospitalCode, setCustomHospitalCode] = useState('');
+  const [customHospitalName, setCustomHospitalName] = useState('');
+  const [usernameInput, setUsernameInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [registerFullName, setRegisterFullName] = useState('');
+  const [registerRole, setRegisterRole] = useState<UserRole>('Medical Doctor');
+  const [registerDepartment, setRegisterDepartment] = useState('Outpatient');
 
   const [activeModule, setActiveModule] = useState<ModuleKey>('overview');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -146,6 +234,7 @@ export default function App() {
 
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
   const notifContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingLoginSelectionRef = useRef<PendingLoginSelection | null>(null);
 
   // Live Firestore collection states
   const [facilities, setFacilities] = useState<Facility[]>([]);
@@ -212,23 +301,64 @@ export default function App() {
         return;
       }
 
+      let pending: PendingLoginSelection | null = pendingLoginSelectionRef.current;
+      if (!pending) {
+        try {
+          const rawPending = window.sessionStorage.getItem(PENDING_LOGIN_STORAGE_KEY);
+          if (rawPending) {
+            pending = JSON.parse(rawPending) as PendingLoginSelection;
+          }
+        } catch {
+          pending = null;
+        }
+      }
+      pendingLoginSelectionRef.current = null;
+      try {
+        window.sessionStorage.removeItem(PENDING_LOGIN_STORAGE_KEY);
+      } catch {
+        // Ignore storage cleanup errors
+      }
+
       try {
         const userRef = doc(db, 'users', fbUser.uid);
         const snap = await getDoc(userRef);
         const now = new Date().toISOString();
 
         if (snap.exists()) {
-          setUserProfile(snap.data() as UserProfile);
+          const existingProfile = snap.data() as UserProfile;
+          if (
+            pending?.facilityId &&
+            (pending.facilityId !== existingProfile.facilityId ||
+              (pending.facilityName && pending.facilityName !== existingProfile.facilityName))
+          ) {
+            const updatedFields = {
+              facilityId: clampStr(pending.facilityId, 128),
+              facilityName: clampStr(pending.facilityName || pending.facilityId, 160),
+              updatedAt: now,
+            };
+            await safeUpdateDoc('users', fbUser.uid, updatedFields);
+            setUserProfile({ ...existingProfile, ...updatedFields });
+          } else {
+            setUserProfile(existingProfile);
+          }
         } else {
-          const isBootAdmin = fbUser.email === BOOTSTRAPPED_ADMIN_EMAIL;
+          const isBootAdmin = fbUser.email === BOOTSTRAPPED_ADMIN_EMAIL && fbUser.emailVerified;
+          const requestedRole =
+            pending?.role && pending.role !== 'Super Administrator' ? pending.role : 'Medical Doctor';
           const newProfile: UserProfile = {
             uid: fbUser.uid,
             email: clampStr(fbUser.email || 'user@jaysaltech.sl', 200),
-            displayName: clampStr(fbUser.displayName || fbUser.email?.split('@')[0] || 'Clinician', 120),
-            role: isBootAdmin ? 'Super Administrator' : 'Medical Doctor',
-            facilityId: 'fac_connaught_sl',
-            facilityName: 'Connaught National Referral Hospital',
-            department: isBootAdmin ? 'Central Platform Governance' : 'Clinical Operations',
+            displayName: clampStr(
+              pending?.displayName || fbUser.displayName || fbUser.email?.split('@')[0] || 'Clinician',
+              120
+            ),
+            role: isBootAdmin ? 'Super Administrator' : requestedRole,
+            facilityId: clampStr(pending?.facilityId || 'fac_connaught_sl', 128),
+            facilityName: clampStr(pending?.facilityName || 'Connaught National Referral Hospital', 160),
+            department: clampStr(
+              pending?.department || (isBootAdmin ? 'Central Platform Governance' : 'Clinical Operations'),
+              100
+            ),
             status: 'Active',
             createdAt: now,
             updatedAt: now,
@@ -427,25 +557,176 @@ export default function App() {
     await safeSetDoc('auditLogs', id, logEntry as unknown as Record<string, unknown>);
   };
 
+  const resolveSelectedHospital = (): { facilityId: string; facilityName: string } | null => {
+    if (!selectedHospitalId) return null;
+    if (selectedHospitalId === 'other') {
+      const cleanCode = customHospitalCode.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      const cleanName = customHospitalName.trim();
+      if (!cleanCode || !cleanName) return null;
+      return {
+        facilityId: cleanCode,
+        facilityName: cleanName,
+      };
+    }
+    const found = LOGIN_HOSPITALS.find((h) => h.id === selectedHospitalId);
+    return found ? { facilityId: found.id, facilityName: found.name } : null;
+  };
+
+  const storePendingLoginSelection = (selection: PendingLoginSelection | null) => {
+    pendingLoginSelectionRef.current = selection;
+    try {
+      if (selection) {
+        window.sessionStorage.setItem(PENDING_LOGIN_STORAGE_KEY, JSON.stringify(selection));
+      } else {
+        window.sessionStorage.removeItem(PENDING_LOGIN_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage availability issues
+    }
+  };
+
+  const mapAuthError = (err: unknown, fallback: string) => {
+    const code = (err as { code?: string })?.code || '';
+    const message = err instanceof Error ? err.message : fallback;
+    if (code === 'auth/unauthorized-domain' || message.includes('auth/unauthorized-domain')) {
+      const host = window.location.hostname || window.location.host;
+      setUnauthorizedDomain(host);
+      setAuthError(`This deployed domain (${host}) is not authorized for Firebase Authentication yet.`);
+      return;
+    }
+    if (code === 'auth/operation-not-allowed' || message.includes('auth/operation-not-allowed')) {
+      setEmailProviderDisabled(true);
+      setAuthError('Email/Password sign-in is not yet enabled in the Firebase Authentication console for project wise-lamp-h3bk6.');
+      return;
+    }
+    if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
+      setAuthError('Invalid staff username/email or password. Please verify your credentials or register a new staff account.');
+      return;
+    }
+    if (code === 'auth/email-already-in-use') {
+      setAuthError('This username or email is already registered. Switch to "Staff Sign In" to access your hospital portal.');
+      return;
+    }
+    if (code === 'auth/weak-password') {
+      setAuthError('Password must be at least 6 characters long.');
+      return;
+    }
+    if (code === 'auth/invalid-email') {
+      setAuthError('Please enter a valid staff username (e.g., dr.kamara) or email address.');
+      return;
+    }
+    if (code === 'auth/too-many-requests') {
+      setAuthError('Too many failed sign-in attempts. Please wait briefly or reset your password.');
+      return;
+    }
+    setAuthError(message);
+  };
+
+  const handlePortalAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthNotice('');
+    setEmailProviderDisabled(false);
+    setUnauthorizedDomain('');
+    setCopiedDomain(false);
+
+    const hospital = resolveSelectedHospital();
+    if (!hospital) {
+      setAuthError(
+        selectedHospitalId === 'other'
+          ? 'Please enter both the registered Facility Code/ID and Hospital Name.'
+          : 'Please select the hospital or healthcare facility where you belong before signing in.'
+      );
+      return;
+    }
+
+    const normalizedEmail = normalizeStaffIdentifier(usernameInput);
+    if (!normalizedEmail) {
+      setAuthError('Please enter your staff username or email address.');
+      return;
+    }
+    if (!passwordInput || passwordInput.length < 6) {
+      setAuthError('Please enter a password (minimum 6 characters).');
+      return;
+    }
+    if (authMode === 'register' && registerFullName.trim().length < 2) {
+      setAuthError('Please enter your full name and clinical title (e.g., Dr. Mohamed Kamara).');
+      return;
+    }
+
+    setSigningIn(true);
+    try {
+      if (authMode === 'register') {
+        const cleanName = clampStr(registerFullName.trim(), 120);
+        const safeRole: UserRole =
+          registerRole === 'Super Administrator' ? 'Medical Doctor' : registerRole;
+        storePendingLoginSelection({
+          facilityId: hospital.facilityId,
+          facilityName: hospital.facilityName,
+          displayName: cleanName,
+          role: safeRole,
+          department: clampStr(registerDepartment.trim() || 'Clinical Operations', 100),
+        });
+        const cred = await createUserWithEmailAndPassword(auth, normalizedEmail, passwordInput);
+        await updateProfile(cred.user, { displayName: cleanName });
+        setPasswordInput('');
+      } else {
+        storePendingLoginSelection({
+          facilityId: hospital.facilityId,
+          facilityName: hospital.facilityName,
+        });
+        await signInWithEmailAndPassword(auth, normalizedEmail, passwordInput);
+        setPasswordInput('');
+      }
+    } catch (err) {
+      storePendingLoginSelection(null);
+      mapAuthError(err, 'Hospital portal authentication failed.');
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    setAuthError('');
+    setAuthNotice('');
+    setEmailProviderDisabled(false);
+    const trimmed = usernameInput.trim();
+    if (!trimmed || !trimmed.includes('@')) {
+      setAuthError('Enter your full registered staff email address above to receive a password reset link.');
+      return;
+    }
+    setSigningIn(true);
+    try {
+      await sendPasswordResetEmail(auth, trimmed.toLowerCase());
+      setAuthNotice(`Password reset link sent to ${trimmed.toLowerCase()}. Check your inbox to set a new password.`);
+    } catch (err) {
+      mapAuthError(err, 'Unable to send password reset email.');
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
   const handleSignIn = async () => {
     setSigningIn(true);
     setAuthError('');
+    setAuthNotice('');
+    setEmailProviderDisabled(false);
     setUnauthorizedDomain('');
     setCopiedDomain(false);
+    const hospital = resolveSelectedHospital();
+    storePendingLoginSelection(
+      hospital
+        ? {
+            facilityId: hospital.facilityId,
+            facilityName: hospital.facilityName,
+          }
+        : null
+    );
     try {
       await signInWithPopup(auth, googleAuthProvider);
     } catch (err) {
-      const code = (err as { code?: string })?.code || '';
-      const message = err instanceof Error ? err.message : 'Google Sign-In failed.';
-      if (code === 'auth/unauthorized-domain' || message.includes('auth/unauthorized-domain')) {
-        const host = window.location.hostname || window.location.host;
-        setUnauthorizedDomain(host);
-        setAuthError(
-          `This deployed domain (${host}) is not authorized for Firebase Google Sign-In yet.`
-        );
-      } else {
-        setAuthError(message);
-      }
+      storePendingLoginSelection(null);
+      mapAuthError(err, 'Google Sign-In failed.');
     } finally {
       setSigningIn(false);
     }
@@ -541,9 +822,12 @@ export default function App() {
 
   // Unauthenticated Sign-In Gate
   if (!firebaseUser || !userProfile) {
+    const selectedHospitalMeta = LOGIN_HOSPITALS.find((h) => h.id === selectedHospitalId);
+    const staffAssignableRoles = USER_ROLES.filter((r) => r !== 'Super Administrator');
+
     return (
       <div className="min-h-screen bg-slate-50 grid grid-cols-1 lg:grid-cols-12">
-        <div className="lg:col-span-6 flex flex-col justify-between p-8 sm:p-12 lg:p-16 bg-white border-r border-slate-200">
+        <div className="lg:col-span-6 flex flex-col justify-between p-6 sm:p-10 lg:p-14 bg-white border-r border-slate-200 overflow-y-auto">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl overflow-hidden bg-[#0a1d37] border border-slate-200 shrink-0">
               <img
@@ -562,19 +846,69 @@ export default function App() {
             </div>
           </div>
 
-          <div className="max-w-md space-y-6 my-12">
-            <div className="space-y-2">
-              <h1 className="text-3xl font-bold font-display text-slate-900 leading-tight text-balance">
+          <div className="max-w-lg w-full space-y-5 my-8">
+            <div className="space-y-1.5">
+              <h1 className="text-2xl sm:text-3xl font-bold font-display text-slate-900 leading-tight text-balance">
                 Connecting Hospitals. Empowering Healthcare. Protecting Communities.
               </h1>
-              <p className="text-sm text-slate-600 leading-relaxed">
-                Centralized multi-facility clinical operations, Population & Workforce Health Early Warning, and end-to-end Screening-to-Care loop tracking.
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                Select your assigned hospital or healthcare facility, then sign in with your staff username and password to access your portal.
               </p>
             </div>
+
+            {/* Auth Mode Switch */}
+            <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('signin');
+                  setAuthError('');
+                  setAuthNotice('');
+                }}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                  authMode === 'signin'
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>Staff Sign In</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('register');
+                  setAuthError('');
+                  setAuthNotice('');
+                }}
+                className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                  authMode === 'register'
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Register Staff Account</span>
+              </button>
+            </div>
+
+            {authNotice && (
+              <div className="bg-teal-50 border border-teal-200 rounded-lg p-3 text-xs text-teal-900">
+                {authNotice}
+              </div>
+            )}
 
             {authError && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3.5 text-xs text-red-900 space-y-2.5">
                 <div className="font-semibold text-red-900">{authError}</div>
+                {emailProviderDisabled && (
+                  <div className="text-red-800 space-y-1 leading-relaxed">
+                    <p>
+                      Administrator setup required once in <strong>Firebase Console (wise-lamp-h3bk6) → Authentication → Sign-in method</strong>:
+                    </p>
+                    <p>Click <strong>Add new provider → Email/Password → Enable → Save</strong>.</p>
+                  </div>
+                )}
                 {unauthorizedDomain && (
                   <div className="space-y-2 text-red-800">
                     <p className="leading-relaxed">
@@ -607,21 +941,226 @@ export default function App() {
               </div>
             )}
 
+            <form onSubmit={handlePortalAuthSubmit} className="space-y-4">
+              {/* Step 1: Select Hospital */}
+              <div className="space-y-1.5">
+                <label htmlFor="hospital-select" className="block text-xs font-semibold text-slate-700">
+                  1. Hospital / Healthcare Facility
+                </label>
+                <div className="relative">
+                  <Building2 className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <select
+                    id="hospital-select"
+                    value={selectedHospitalId}
+                    onChange={(e) => {
+                      setSelectedHospitalId(e.target.value);
+                      setAuthError('');
+                    }}
+                    required
+                    className="w-full pl-9 pr-3 py-2.5 text-sm bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-teal-600"
+                  >
+                    <option value="">Select the hospital where you belong...</option>
+                    {LOGIN_HOSPITALS.map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.name} ({h.code} · {h.district})
+                      </option>
+                    ))}
+                    <option value="other">Other Registered Facility (Enter Facility Code)</option>
+                  </select>
+                </div>
+                {selectedHospitalMeta && (
+                  <div className="flex items-center justify-between text-[11px] text-teal-800 bg-teal-50/70 border border-teal-200 rounded-lg px-3 py-1.5">
+                    <span className="font-medium truncate">{selectedHospitalMeta.type} · {selectedHospitalMeta.district} District</span>
+                    <span className="font-mono font-semibold shrink-0 ml-2">{selectedHospitalMeta.code}</span>
+                  </div>
+                )}
+              </div>
+
+              {selectedHospitalId === 'other' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                  <div>
+                    <label htmlFor="custom-fac-code" className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Facility ID / Code
+                    </label>
+                    <input
+                      id="custom-fac-code"
+                      type="text"
+                      value={customHospitalCode}
+                      onChange={(e) => setCustomHospitalCode(e.target.value)}
+                      placeholder="e.g., fac_lunsar_hosp"
+                      required
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="custom-fac-name" className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Hospital / Clinic Name
+                    </label>
+                    <input
+                      id="custom-fac-name"
+                      type="text"
+                      value={customHospitalName}
+                      onChange={(e) => setCustomHospitalName(e.target.value)}
+                      placeholder="e.g., Lunsar Baptist Hospital"
+                      required
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {authMode === 'register' && (
+                <div className="space-y-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+                  <div>
+                    <label htmlFor="register-fullname" className="block text-xs font-semibold text-slate-700 mb-1">
+                      Full Name & Clinical Title
+                    </label>
+                    <input
+                      id="register-fullname"
+                      type="text"
+                      value={registerFullName}
+                      onChange={(e) => setRegisterFullName(e.target.value)}
+                      placeholder="e.g., Dr. Mohamed Kamara"
+                      required
+                      className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="register-role" className="block text-xs font-semibold text-slate-700 mb-1">
+                        Hospital Role
+                      </label>
+                      <select
+                        id="register-role"
+                        value={registerRole}
+                        onChange={(e) => setRegisterRole(e.target.value as UserRole)}
+                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                      >
+                        {staffAssignableRoles.map((role) => (
+                          <option key={role} value={role}>
+                            {role}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="register-dept" className="block text-xs font-semibold text-slate-700 mb-1">
+                        Department / Unit
+                      </label>
+                      <input
+                        id="register-dept"
+                        type="text"
+                        value={registerDepartment}
+                        onChange={(e) => setRegisterDepartment(e.target.value)}
+                        placeholder="e.g., Outpatient, Maternity"
+                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 2: Username & Password */}
+              <div className="space-y-3">
+                <div>
+                  <label htmlFor="portal-username" className="block text-xs font-semibold text-slate-700 mb-1">
+                    2. Staff Username or Email
+                  </label>
+                  <div className="relative">
+                    <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      id="portal-username"
+                      type="text"
+                      autoComplete="username"
+                      value={usernameInput}
+                      onChange={(e) => setUsernameInput(e.target.value)}
+                      placeholder="e.g., dr.kamara or dr.kamara@bohospital.sl"
+                      required
+                      className="w-full pl-9 pr-3 py-2.5 text-sm bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-teal-600"
+                    />
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Enter a full email address or staff username (mapped automatically to <code className="font-mono">@jaysaltech.sl</code>).
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label htmlFor="portal-password" className="block text-xs font-semibold text-slate-700">
+                      3. Password
+                    </label>
+                    {authMode === 'signin' && (
+                      <button
+                        type="button"
+                        onClick={handlePasswordReset}
+                        disabled={signingIn}
+                        className="text-[11px] font-medium text-teal-700 hover:text-teal-800"
+                      >
+                        Forgot password?
+                      </button>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      id="portal-password"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
+                      value={passwordInput}
+                      onChange={(e) => setPasswordInput(e.target.value)}
+                      placeholder={authMode === 'register' ? 'Create password (min 6 characters)' : 'Enter your password'}
+                      required
+                      minLength={6}
+                      className="w-full pl-9 pr-10 py-2.5 text-sm bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-teal-600"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={signingIn}
+                className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                <span>
+                  {signingIn
+                    ? 'Authenticating...'
+                    : authMode === 'register'
+                      ? 'Create Staff Account & Enter Portal'
+                      : 'Login to Hospital Portal'}
+                </span>
+              </button>
+            </form>
+
+            <div className="relative flex items-center py-1">
+              <div className="flex-grow border-t border-slate-200" />
+              <span className="shrink mx-3 text-[11px] font-medium text-slate-400">Or continue with SSO</span>
+              <div className="flex-grow border-t border-slate-200" />
+            </div>
+
             <button
               type="button"
               disabled={signingIn}
               onClick={handleSignIn}
-              className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold rounded-xl transition-colors flex items-center justify-center gap-2.5 disabled:opacity-60"
+              className="w-full py-2.5 px-4 bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 text-xs font-semibold rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
             >
               <span>{signingIn ? 'Authenticating...' : 'Sign in with Authorized Google Account'}</span>
             </button>
 
-            <div className="border-t border-slate-200 pt-4 text-xs text-slate-500 space-y-1.5">
+            <div className="border-t border-slate-200 pt-3.5 text-xs text-slate-500 space-y-1">
               <p>
-                <strong>Role-Based Isolation:</strong> Access is scoped by verified user role and assigned healthcare facility under Firestore security rules.
+                <strong>Facility & Role Isolation:</strong> Access is scoped by verified user role and selected healthcare facility under Firestore security rules.
               </p>
               <p>
-                <strong>Demonstration Safeguard:</strong> Pre-loaded demonstration records are synthetic and clearly labeled; clinical & public health alerts require human verification.
+                <strong>Demonstration Safeguard:</strong> Pre-loaded demonstration records are synthetic and clearly labeled; alerts require clinician verification.
               </p>
             </div>
           </div>
