@@ -36,6 +36,7 @@ import {
   LogOut,
   Menu,
   Pill,
+  Printer,
   Search,
   Stethoscope,
   Users,
@@ -79,6 +80,10 @@ import {
   testConnection,
 } from './lib/firebase';
 import { seedSyntheticSierraLeoneDataset } from './lib/seedData';
+import type { HubDatasetSnapshot } from './lib/exportUtils';
+import { PrintFooter, PrintLetterhead } from './components/PrintHeaderFooter';
+import { ModuleRecordsToolbar } from './components/ModuleRecordsToolbar';
+import { PrintPreviewModal } from './components/PrintPreviewModal';
 import { OverviewDashboard } from './components/modules/OverviewDashboard';
 import { PopulationHealthModule } from './components/modules/PopulationHealthModule';
 import { ScreeningCareLoopModule } from './components/modules/ScreeningCareLoopModule';
@@ -86,6 +91,21 @@ import { PatientsClinicalModule } from './components/modules/PatientsClinicalMod
 import { DiagnosticsOperationsModule } from './components/modules/DiagnosticsOperationsModule';
 import { FinanceTelemedicineNhieModule } from './components/modules/FinanceTelemedicineNhieModule';
 import { AdminGovernanceModule } from './components/modules/AdminGovernanceModule';
+
+const PRINT_DOCUMENT_TITLES: Record<ModuleKey, string> = {
+  overview: 'Hospital Network Executive Overview Report',
+  'population-health': 'Population & Workforce Health Early Warning Report',
+  'screening-loop': 'Screening-to-Care Loop & Follow-Up Register',
+  patients: 'Authorized Patient Registry Report',
+  clinical: 'Clinical Encounters & Ward Register',
+  laboratory: 'Clinical Laboratory Diagnostics Sheet',
+  pharmacy: 'Pharmacy Inventory & Dispensing Report',
+  'blood-bank': 'Blood Bank Inventory & Transfusion Register',
+  insurance: 'Hospital Billing & Insurance Claims Statement',
+  telemedicine: 'Telemedicine Consultations Schedule',
+  'nhie-analytics': 'NHIE Interoperability & District Executive Summary',
+  'admin-docs': 'Central Administration & Governance Audit Report',
+};
 
 const NAV_ITEMS: { key: ModuleKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'overview', label: 'Executive Overview', icon: LayoutDashboard },
@@ -122,6 +142,7 @@ export default function App() {
   const [searchFocused, setSearchFocused] = useState(false);
   const [toast, setToast] = useState<string>('');
   const [seeding, setSeeding] = useState(false);
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
 
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
   const notifContainerRef = useRef<HTMLDivElement | null>(null);
@@ -337,6 +358,51 @@ export default function App() {
       setActiveModule(perms.modules[0] || 'overview');
     }
   }, [perms.modules, activeModule]);
+
+  const hubSnapshot: HubDatasetSnapshot = useMemo(
+    () => ({
+      facilities,
+      staffUsers,
+      patients,
+      encounters,
+      campaigns,
+      screenings,
+      followUpTasks,
+      referrals,
+      labOrders,
+      medicines,
+      prescriptions,
+      bloodDonors,
+      bloodUnits,
+      claims,
+      telemedicine,
+      surveillance,
+      alerts,
+      auditLogs,
+      settings,
+    }),
+    [
+      facilities,
+      staffUsers,
+      patients,
+      encounters,
+      campaigns,
+      screenings,
+      followUpTasks,
+      referrals,
+      labOrders,
+      medicines,
+      prescriptions,
+      bloodDonors,
+      bloodUnits,
+      claims,
+      telemedicine,
+      surveillance,
+      alerts,
+      auditLogs,
+      settings,
+    ]
+  );
 
   const logAudit = async (
     action: string,
@@ -774,6 +840,17 @@ export default function App() {
               </select>
             )}
 
+            {/* Print Preview & Export Current Module */}
+            <button
+              type="button"
+              onClick={() => setShowPrintPreview(true)}
+              className="p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100"
+              title="Open Standard A4 Print Preview"
+              aria-label="Open Standard A4 Print Preview"
+            >
+              <Printer className="w-4 h-4" />
+            </button>
+
             {/* Notification Centre */}
             <div ref={notifContainerRef} className="relative">
               <button
@@ -851,7 +928,7 @@ export default function App() {
 
         {/* Toast Notification */}
         {toast && (
-          <div className="mx-4 sm:mx-6 mt-4 bg-slate-900 text-white text-xs font-medium px-4 py-2.5 rounded-lg flex items-center justify-between">
+          <div className="no-print mx-4 sm:mx-6 mt-4 bg-slate-900 text-white text-xs font-medium px-4 py-2.5 rounded-lg flex items-center justify-between">
             <span>{toast}</span>
             <button type="button" onClick={() => setToast('')} className="text-slate-400 hover:text-white">
               <X className="w-3.5 h-3.5" />
@@ -861,6 +938,20 @@ export default function App() {
 
         {/* Active Module Viewport */}
         <main className="flex-1 p-4 sm:p-6 max-w-[1440px] w-full mx-auto">
+          <PrintLetterhead
+            documentTitle={PRINT_DOCUMENT_TITLES[activeModule] || 'Hospital Operations Report'}
+            facilityName={userProfile.facilityName || 'Network Wide'}
+            preparedBy={userProfile.displayName}
+            preparedRole={effectiveRole}
+          />
+          <ModuleRecordsToolbar
+            moduleKey={activeModule}
+            user={userProfile}
+            effectiveRole={effectiveRole}
+            data={hubSnapshot}
+            onOpenPrintPreview={() => setShowPrintPreview(true)}
+            onToast={showToast}
+          />
           {activeModule === 'overview' && (
             <OverviewDashboard
               facilities={facilities}
@@ -889,6 +980,7 @@ export default function App() {
               canVerifyAlerts={perms.canVerifyAlerts}
               onLogAudit={logAudit}
               onToast={showToast}
+              onOpenPrintPreview={() => setShowPrintPreview(true)}
             />
           )}
 
@@ -942,6 +1034,7 @@ export default function App() {
               canDispensePharmacy={perms.canDispensePharmacy}
               onLogAudit={logAudit}
               onToast={showToast}
+              onOpenPrintPreview={() => setShowPrintPreview(true)}
             />
           )}
 
@@ -962,6 +1055,7 @@ export default function App() {
               canManageClaims={perms.canManageClaims}
               onLogAudit={logAudit}
               onToast={showToast}
+              onOpenPrintPreview={() => setShowPrintPreview(true)}
             />
           )}
 
@@ -978,8 +1072,21 @@ export default function App() {
               onToast={showToast}
             />
           )}
+
+          <PrintFooter preparedBy={userProfile.displayName} preparedRole={effectiveRole} />
         </main>
       </div>
+
+      {showPrintPreview && (
+        <PrintPreviewModal
+          moduleKey={activeModule}
+          user={userProfile}
+          effectiveRole={effectiveRole}
+          data={hubSnapshot}
+          onClose={() => setShowPrintPreview(false)}
+          onToast={showToast}
+        />
+      )}
     </div>
   );
 }

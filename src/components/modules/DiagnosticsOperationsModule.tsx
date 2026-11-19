@@ -30,6 +30,7 @@ interface Props {
   canDispensePharmacy: boolean;
   onLogAudit: (action: string, resourceType: string, resourceId: string, details: string) => Promise<void>;
   onToast: (msg: string) => void;
+  onOpenPrintPreview?: () => void;
 }
 
 export const DiagnosticsOperationsModule: React.FC<Props> = ({
@@ -46,6 +47,7 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
   canDispensePharmacy,
   onLogAudit,
   onToast,
+  onOpenPrintPreview,
 }) => {
   // Lab state
   const [showLabForm, setShowLabForm] = useState(false);
@@ -362,8 +364,8 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
             <h2 className="text-lg font-bold text-slate-900">Laboratory Management & Diagnostics</h2>
             <p className="text-xs text-slate-600 mt-1">Sample collection tracking, reference ranges, automated abnormal flagging, and supervisor approval.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={triggerPrintReport} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50">
+          <div className="no-print flex items-center gap-2">
+            <button type="button" onClick={() => (onOpenPrintPreview ? onOpenPrintPreview() : triggerPrintReport())} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50">
               <Printer className="w-3.5 h-3.5" /> Print Lab Sheet
             </button>
             <button type="button" onClick={() => setShowLabForm(!showLabForm)} className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800">
@@ -421,7 +423,7 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                 <th className="py-2.5 px-4 font-semibold">Test Requested</th>
                 <th className="py-2.5 px-4 font-semibold">Result & Reference</th>
                 <th className="py-2.5 px-4 font-semibold">Status</th>
-                <th className="py-2.5 px-4 font-semibold text-right">Action</th>
+                <th className="no-print py-2.5 px-4 font-semibold text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -440,7 +442,7 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                     <div className="text-[11px] text-slate-500">Ref: {l.referenceRange || 'Standard'}</div>
                   </td>
                   <td className="py-2.5 px-4 font-medium text-slate-800">{l.status}</td>
-                  <td className="py-2.5 px-4 text-right">
+                  <td className="no-print py-2.5 px-4 text-right">
                     {l.status !== 'Approved' && (
                       <button
                         type="button"
@@ -472,7 +474,7 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
             <h2 className="text-lg font-bold text-slate-900">Pharmacy Stock & Prescription Dispensing</h2>
             <p className="text-xs text-slate-600 mt-1">Medicine inventory, batch expiry alerts, reorder thresholds, and automated stock deduction on dispensing.</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="no-print flex items-center gap-2">
             <button type="button" onClick={() => setShowRxForm(!showRxForm)} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50">
               <Plus className="w-3.5 h-3.5" /> New Prescription
             </button>
@@ -578,7 +580,7 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                         <button
                           type="button"
                           onClick={() => handleRestockMedicine(m, 50)}
-                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 border border-slate-300 rounded hover:bg-slate-50 whitespace-nowrap"
+                          className="no-print inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 border border-slate-300 rounded hover:bg-slate-50 whitespace-nowrap"
                           title="Add 50 units to inventory"
                         >
                           <PackagePlus className="w-3 h-3" /> +50
@@ -604,14 +606,17 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                     <div className="text-slate-600">{rx.dosage} {rx.frequency} · Qty: <span className="font-mono">{rx.quantity}</span></div>
                   </div>
                   {rx.status === 'Pending' && canDispensePharmacy ? (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button type="button" onClick={() => handleCancelRx(rx)} className="px-2 py-1.5 text-xs font-medium text-slate-600 border border-slate-300 rounded-md hover:bg-slate-50">
-                        Cancel
-                      </button>
-                      <button type="button" onClick={() => handleDispenseRx(rx)} className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-emerald-700 rounded-md hover:bg-emerald-800">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Dispense
-                      </button>
-                    </div>
+                    <>
+                      <span className="print-only font-medium text-slate-700">{rx.status}</span>
+                      <div className="no-print flex items-center gap-1.5 shrink-0">
+                        <button type="button" onClick={() => handleCancelRx(rx)} className="px-2 py-1.5 text-xs font-medium text-slate-600 border border-slate-300 rounded-md hover:bg-slate-50">
+                          Cancel
+                        </button>
+                        <button type="button" onClick={() => handleDispenseRx(rx)} className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-emerald-700 rounded-md hover:bg-emerald-800">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Dispense
+                        </button>
+                      </div>
+                    </>
                   ) : (
                     <span className="font-medium text-slate-700">{rx.status}</span>
                   )}
@@ -632,7 +637,7 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
           <h2 className="text-lg font-bold text-slate-900">Blood Bank Management & Transfusion Tracking</h2>
           <p className="text-xs text-slate-600 mt-1">Voluntary donor registry, blood group stock levels, expiry alerts, cross-matching, and safe issue tracking.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="no-print flex items-center gap-2">
           <button type="button" onClick={() => setShowDonorForm(!showDonorForm)} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50">
             <Plus className="w-3.5 h-3.5" /> Register Donor
           </button>
@@ -689,20 +694,20 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                           setCrossMatchUnitId(u.id);
                           setCrossMatchPatId(patients[0]?.id || '');
                         }}
-                        className="px-2.5 py-1 border border-slate-300 rounded hover:bg-slate-50"
+                        className="no-print px-2.5 py-1 border border-slate-300 rounded hover:bg-slate-50"
                       >
                         Cross-Match
                       </button>
                     )}
                     {u.status === 'Cross-Matched' && (
-                      <button type="button" onClick={() => handleUpdateBloodUnitStatus(u, 'Issued')} className="px-2.5 py-1 bg-teal-700 text-white rounded hover:bg-teal-800">
+                      <button type="button" onClick={() => handleUpdateBloodUnitStatus(u, 'Issued')} className="no-print px-2.5 py-1 bg-teal-700 text-white rounded hover:bg-teal-800">
                         Issue Unit
                       </button>
                     )}
                   </div>
                 </div>
                 {crossMatchUnitId === u.id && (
-                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                  <div className="no-print flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
                     <select
                       value={effectiveCrossMatchPatId}
                       onChange={(e) => setCrossMatchPatId(e.target.value)}

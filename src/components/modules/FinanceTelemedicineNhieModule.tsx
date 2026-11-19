@@ -34,6 +34,7 @@ interface Props {
   canManageClaims: boolean;
   onLogAudit: (action: string, resourceType: string, resourceId: string, details: string) => Promise<void>;
   onToast: (msg: string) => void;
+  onOpenPrintPreview?: () => void;
 }
 
 export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
@@ -52,6 +53,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
   canManageClaims,
   onLogAudit,
   onToast,
+  onOpenPrintPreview,
 }) => {
   // Claims state
   const [showClaimForm, setShowClaimForm] = useState(false);
@@ -263,7 +265,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
             <h2 className="text-lg font-bold text-slate-900">Hospital Billing, Insurance & Claims</h2>
             <p className="text-xs text-slate-600 mt-1">Manage NASSIT, FHCI, and private insurer claims, adjudication, and payment reconciliation.</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="no-print flex items-center gap-2">
             <button
               type="button"
               onClick={() =>
@@ -345,7 +347,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
                 <th className="py-2.5 px-4 font-semibold">Service Line</th>
                 <th className="py-2.5 px-4 font-semibold text-right">Amount (SLE)</th>
                 <th className="py-2.5 px-4 font-semibold">Status</th>
-                <th className="py-2.5 px-4 font-semibold text-right">Adjudication</th>
+                <th className="no-print py-2.5 px-4 font-semibold text-right">Adjudication</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -362,7 +364,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
                   <td className="py-2.5 px-4 text-slate-700">{c.serviceDescription}</td>
                   <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900">{c.amountSLL.toLocaleString()}</td>
                   <td className="py-2.5 px-4 font-medium text-slate-800">{c.status} {c.paymentReference ? `· ${c.paymentReference}` : ''}</td>
-                  <td className="py-2.5 px-4 text-right space-x-1.5 whitespace-nowrap">
+                  <td className="no-print py-2.5 px-4 text-right space-x-1.5 whitespace-nowrap">
                     {canManageClaims && c.status === 'Submitted' && (
                       <>
                         <button type="button" onClick={() => handleUpdateClaimStatus(c, 'Approved')} className="px-2 py-1 text-xs bg-teal-50 text-teal-800 border border-teal-200 rounded">Approve</button>
@@ -392,7 +394,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
               Manage specialist virtual appointments and clinical notes. Live WebRTC video transport requires configuring an external licensed telehealth media gateway.
             </p>
           </div>
-          <button type="button" onClick={() => setShowTelForm(!showTelForm)} className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 whitespace-nowrap">
+          <button type="button" onClick={() => setShowTelForm(!showTelForm)} className="no-print inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 whitespace-nowrap">
             <Plus className="w-3.5 h-3.5" /> Schedule Virtual Consult
           </button>
         </div>
@@ -446,7 +448,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={() => handleTelemedicineStatus(t, 'Ready')}
-                    className="px-2.5 py-1.5 text-xs font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100"
+                    className="no-print px-2.5 py-1.5 text-xs font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100"
                   >
                     Mark Ready
                   </button>
@@ -456,14 +458,14 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
                     <button
                       type="button"
                       onClick={() => handleTelemedicineStatus(t, 'Cancelled')}
-                      className="px-2.5 py-1.5 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50"
+                      className="no-print px-2.5 py-1.5 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50"
                     >
                       Cancel
                     </button>
                     <button
                       type="button"
                       onClick={() => handleTelemedicineStatus(t, 'Completed')}
-                      className="px-3 py-1.5 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800"
+                      className="no-print px-3 py-1.5 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800"
                     >
                       Mark Completed
                     </button>
@@ -509,7 +511,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
             Authorized facility-to-facility referral exchange, HL7 FHIR R4 interoperability mapping, and cross-district hospital analytics. Live external Ministry/DHIS2 endpoints require signed facility certificates before activation.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <div className="no-print flex flex-wrap items-center gap-2 shrink-0">
           <button type="button" onClick={() => setShowRefForm(!showRefForm)} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800">
             <ArrowLeftRight className="w-3.5 h-3.5" /> New NHIE Referral
           </button>
@@ -530,7 +532,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
           >
             <Download className="w-3.5 h-3.5" /> Export District Analytics
           </button>
-          <button type="button" onClick={triggerPrintReport} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50">
+          <button type="button" onClick={() => (onOpenPrintPreview ? onOpenPrintPreview() : triggerPrintReport())} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50">
             <Printer className="w-3.5 h-3.5" /> Print Executive Summary
           </button>
         </div>
@@ -609,7 +611,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
           </div>
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             {referrals.map((r) => (
-              <div key={r.id} className="p-4 text-xs flex items-start justify-between gap-4">
+              <div key={r.id} className="print-avoid-break p-4 text-xs flex items-start justify-between gap-4">
                 <div>
                   <div className="font-semibold text-slate-900">{r.patientName} ({r.patientUid}) · {r.specialty}</div>
                   <div className="text-slate-600 mt-0.5">{r.fromFacilityName} → {r.toFacilityName}</div>
@@ -619,7 +621,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
                   <div className="font-medium text-slate-800">
                     {r.status} {r.appointmentDate ? `· ${r.appointmentDate}` : ''}
                   </div>
-                  <div className="flex flex-wrap justify-end gap-1.5">
+                  <div className="no-print flex flex-wrap justify-end gap-1.5">
                     {r.status === 'Pending' && (
                       <>
                         <button
@@ -675,7 +677,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
 
       {/* Live FHIR R4 Mapping Preview */}
       {fhirPreview && (
-        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+        <div className="no-print bg-white border border-slate-200 rounded-xl p-5 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
               <FileCode className="w-4 h-4 text-teal-700" />

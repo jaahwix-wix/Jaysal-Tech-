@@ -326,7 +326,7 @@ export const PatientsClinicalModule: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={openNewPatient}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 whitespace-nowrap shrink-0"
+                className="no-print inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 whitespace-nowrap shrink-0"
               >
                 <Plus className="w-3.5 h-3.5" />
                 Register New Patient
@@ -433,7 +433,7 @@ export const PatientsClinicalModule: React.FC<Props> = ({
           )}
 
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+            <div className="no-print px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
@@ -459,7 +459,7 @@ export const PatientsClinicalModule: React.FC<Props> = ({
                     <th className="py-2.5 px-4 font-semibold">Demographics</th>
                     <th className="py-2.5 px-4 font-semibold">District & Facility</th>
                     <th className="py-2.5 px-4 font-semibold">Medical Alerts</th>
-                    <th className="py-2.5 px-4 font-semibold text-right">Actions</th>
+                    <th className="no-print py-2.5 px-4 font-semibold text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -481,7 +481,7 @@ export const PatientsClinicalModule: React.FC<Props> = ({
                         <td className="py-2.5 px-4 text-slate-700 max-w-xs truncate">
                           {p.allergies && p.allergies !== 'None documented' ? `Allergy: ${p.allergies}` : p.chronicConditions || 'Nominal'}
                         </td>
-                        <td className="py-2.5 px-4 text-right space-x-2 whitespace-nowrap">
+                        <td className="no-print py-2.5 px-4 text-right space-x-2 whitespace-nowrap">
                           <button
                             type="button"
                             onClick={() => setSelectedPatient(p)}
@@ -508,7 +508,7 @@ export const PatientsClinicalModule: React.FC<Props> = ({
               </table>
             </div>
 
-            <div className="px-5 py-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600">
+            <div className="no-print px-5 py-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600">
               <span>Showing {pagedPatients.length} of {filteredPatients.length} patients</span>
               <div className="flex items-center gap-2">
                 <button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)} className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-40">Prev</button>
@@ -542,7 +542,7 @@ export const PatientsClinicalModule: React.FC<Props> = ({
                   setEncStatus('In Consultation');
                   setShowEncForm(!showEncForm);
                 }}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 whitespace-nowrap"
+                className="no-print inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 whitespace-nowrap"
               >
                 <Stethoscope className="w-3.5 h-3.5" />
                 New Clinical Encounter
@@ -636,7 +636,7 @@ export const PatientsClinicalModule: React.FC<Props> = ({
           )}
 
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+            <div className="no-print px-5 py-3 border-b border-slate-200 flex items-center justify-between">
               <input
                 type="search"
                 value={search}
@@ -651,7 +651,7 @@ export const PatientsClinicalModule: React.FC<Props> = ({
                 <div className="p-8 text-center text-xs text-slate-500">No encounters recorded yet.</div>
               ) : (
                 filteredEncounters.map((enc) => (
-                  <div key={enc.id} className="p-5 flex flex-col lg:flex-row lg:items-start justify-between gap-4 hover:bg-slate-50/60">
+                  <div key={enc.id} className="print-avoid-break p-5 flex flex-col lg:flex-row lg:items-start justify-between gap-4 hover:bg-slate-50/60">
                     <div className="space-y-1.5 max-w-3xl text-xs">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono font-semibold text-teal-800">{enc.patientUid}</span>
@@ -687,7 +687,7 @@ export const PatientsClinicalModule: React.FC<Props> = ({
                           setEncWardBed(enc.wardBed || '');
                           setShowEncForm(true);
                         }}
-                        className="px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-100 whitespace-nowrap shrink-0"
+                        className="no-print px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-100 whitespace-nowrap shrink-0"
                       >
                         Update / Discharge
                       </button>

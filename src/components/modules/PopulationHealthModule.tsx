@@ -25,6 +25,7 @@ interface Props {
   canVerifyAlerts: boolean;
   onLogAudit: (action: string, resourceType: string, resourceId: string, details: string) => Promise<void>;
   onToast: (msg: string) => void;
+  onOpenPrintPreview?: () => void;
 }
 
 const CONDITIONS = [
@@ -46,6 +47,7 @@ export const PopulationHealthModule: React.FC<Props> = ({
   canVerifyAlerts,
   onLogAudit,
   onToast,
+  onOpenPrintPreview,
 }) => {
   const [selectedDistrict, setSelectedDistrict] = useState<string>('All');
   const [selectedPeriod, setSelectedPeriod] = useState<'All' | 'Daily' | 'Weekly' | 'Monthly'>('All');
@@ -249,7 +251,7 @@ export const PopulationHealthModule: React.FC<Props> = ({
             Explainable threshold-based surveillance across Sierra Leone. Algorithmic alerts highlight statistical deviations requiring public health verification and never constitute automated outbreak confirmation.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <div className="no-print flex flex-wrap items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => setShowReportForm(!showReportForm)}
@@ -294,7 +296,7 @@ export const PopulationHealthModule: React.FC<Props> = ({
           </button>
           <button
             type="button"
-            onClick={triggerPrintReport}
+            onClick={() => (onOpenPrintPreview ? onOpenPrintPreview() : triggerPrintReport())}
             className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 whitespace-nowrap"
           >
             <Printer className="w-3.5 h-3.5" />
@@ -448,7 +450,10 @@ export const PopulationHealthModule: React.FC<Props> = ({
 
       {/* Sub-Tabs & Filters */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+        <div className="print-only px-5 py-2.5 bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-800">
+          Report Scope: {activeTab === 'alerts' ? 'Public Health Alerts' : activeTab === 'surveillance' ? 'Surveillance Logs' : 'Workforce & Climate Indicators'} · District: {selectedDistrict === 'All' ? 'All 16 Districts' : selectedDistrict} · Period: {selectedPeriod}
+        </div>
+        <div className="no-print px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
             {([
               ['alerts', `Public Health Alerts (${filteredAlerts.length})`],
@@ -500,7 +505,7 @@ export const PopulationHealthModule: React.FC<Props> = ({
               </div>
             ) : (
               filteredAlerts.map((alert) => (
-                <div key={alert.id} className="p-5 flex flex-col lg:flex-row lg:items-start justify-between gap-4 hover:bg-slate-50/70">
+                <div key={alert.id} className="print-avoid-break p-5 flex flex-col lg:flex-row lg:items-start justify-between gap-4 hover:bg-slate-50/70">
                   <div className="space-y-1.5 max-w-3xl">
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <span className="font-mono font-semibold text-slate-900">{alert.referenceNumber}</span>
@@ -544,7 +549,7 @@ export const PopulationHealthModule: React.FC<Props> = ({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="no-print flex items-center gap-2 shrink-0">
                     {canVerifyAlerts ? (
                       <button
                         type="button"

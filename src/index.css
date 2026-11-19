@@ -22,18 +22,95 @@
   }
 }
 
+@page {
+  size: A4 portrait;
+  margin: 14mm 12mm 16mm 12mm;
+}
+
+.print-only {
+  display: none;
+}
+
+.patient-dossier-print-portal,
+.module-report-print-portal {
+  display: none;
+}
+
 @media print {
+  html,
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 11px !important;
+    line-height: 1.45 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
   aside,
   header,
+  form,
   .no-print {
     display: none !important;
   }
+
+  .print-only {
+    display: block !important;
+  }
+
   main {
     margin: 0 !important;
     padding: 0 !important;
+    max-width: none !important;
     width: 100% !important;
   }
-  body {
+
+  main .overflow-y-auto,
+  main .overflow-x-auto,
+  .print-expand {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr,
+  .print-avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .shadow-sm,
+  .shadow,
+  .shadow-lg {
+    box-shadow: none !important;
+  }
+
+  body.printing-patient-dossier #root,
+  body.printing-module-report #root {
+    display: none !important;
+  }
+
+  body.printing-patient-dossier:not(.printing-module-report) .patient-dossier-print-portal {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
     background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  body.printing-module-report .module-report-print-portal {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
   }
 }
