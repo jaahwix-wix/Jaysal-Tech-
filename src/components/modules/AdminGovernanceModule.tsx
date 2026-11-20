@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, ShieldCheck, Building2, Sliders, FileText, CheckCircle2, Download, Copy, UserCheck, XCircle } from 'lucide-react';
+import { Plus, ShieldCheck, Building2, Sliders, FileText, CheckCircle2, Download, Copy, UserCheck, XCircle, Edit3, KeyRound } from 'lucide-react';
 import {
   SIERRA_LEONE_DISTRICTS,
   USER_ROLES,
@@ -11,7 +11,9 @@ import {
   type UserProfile,
   type UserRole,
 } from '../../types/hub';
-import { safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
+import { safeDeleteDoc, safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
+import { downloadSystemDocumentationPdf } from '../../lib/pdfDocumentation';
+import { ConfirmDeleteButton } from '../ConfirmDeleteButton';
 import initialSqlSchema from '../../../supabase/migrations/001_initial_schema.sql?raw';
 import platformDocsMd from '../../../docs/PLATFORM_DOCUMENTATION.md?raw';
 
@@ -23,6 +25,7 @@ interface Props {
   auditLogs: AuditLog[];
   canManageFacilities: boolean;
   canManageUsers: boolean;
+  canAdminManageRecords?: boolean;
   onLogAudit: (action: string, resourceType: string, resourceId: string, details: string) => Promise<void>;
   onToast: (msg: string) => void;
 }
@@ -35,6 +38,7 @@ export const AdminGovernanceModule: React.FC<Props> = ({
   auditLogs,
   canManageFacilities,
   canManageUsers,
+  canAdminManageRecords = false,
   onLogAudit,
   onToast,
 }) => {
@@ -49,6 +53,7 @@ export const AdminGovernanceModule: React.FC<Props> = ({
 
   // Facility Form
   const [showFacForm, setShowFacForm] = useState(false);
+  const [editingFac, setEditingFac] = useState<Facility | null>(null);
   const [facName, setFacName] = useState('');
   const [facCode, setFacCode] = useState('');
   const [facType, setFacType] = useState('Regional Hospital');
@@ -87,16 +92,56 @@ export const AdminGovernanceModule: React.FC<Props> = ({
     URL.revokeObjectURL(url);
   };
 
+  const openNewFacility = () => {
+    setEditingFac(null);
+    setFacName('');
+    setFacCode('');
+    setFacType('Regional Hospital');
+    setFacDistrict('Bo');
+    setFacBeds('120');
+    setFacDepts('Outpatient, Maternity, Laboratory, Pharmacy');
+    setShowFacForm(!showFacForm);
+  };
+
+  const openEditFacility = (f: Facility) => {
+    setEditingFac(f);
+    setFacName(f.name);
+    setFacCode(f.code);
+    setFacType(f.type);
+    setFacDistrict(f.district);
+    setFacBeds(String(f.bedCapacity));
+    setFacDepts(f.departments.join(', '));
+    setShowFacForm(true);
+  };
+
   const handleRegisterFacility = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const id = makeSafeId('fac');
       const now = new Date().toISOString();
       const depts = facDepts
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean)
         .slice(0, 25);
+
+      if (editingFac) {
+        await safeUpdateDoc('facilities', editingFac.id, {
+          name: clampStr(facName, 160),
+          code: clampStr(facCode || editingFac.code, 40),
+          type: clampStr(facType, 60),
+          district: clampStr(facDistrict, 80),
+          bedCapacity: Math.max(0, Number(facBeds) || 0),
+          departments: depts.length ? depts : ['Outpatient'],
+          updatedAt: now,
+        });
+        await onLogAudit('UPDATE_FACILITY', 'Facility', editingFac.id, `Updated facility ${facName} (${facCode})`);
+        setEditingFac(null);
+        setShowFacForm(false);
+        onToast(`Facility ${facName} updated.`);
+        return;
+      }
+
+      const id = makeSafeId('fac');
       const fac: Facility = {
         id,
         name: clampStr(facName, 160),
@@ -121,7 +166,17 @@ export const AdminGovernanceModule: React.FC<Props> = ({
       setFacCode('');
       onToast(`Facility ${fac.name} registered.`);
     } catch (err) {
-      onToast(err instanceof Error ? err.message : 'Unable to register facility.');
+      onToast(err instanceof Error ? err.message : 'Unable to save facility.');
+    }
+  };
+
+  const handleDeleteFacility = async (fac: Facility) => {
+    try {
+      await safeDeleteDoc('facilities', fac.id);
+      await onLogAudit('DELETE_FACILITY', 'Facility', fac.id, `Deleted facility ${fac.name} (${fac.code})`);
+      onToast(`Facility ${fac.name} deleted.`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete facility.');
     }
   };
 
@@ -192,6 +247,21 @@ export const AdminGovernanceModule: React.FC<Props> = ({
     }
   };
 
+  const handleDeleteStaffUser = async (target: UserProfile) => {
+    try {
+      await safeDeleteDoc('users', target.uid);
+      await onLogAudit(
+        'DELETE_STAFF_USER',
+        'UserProfile',
+        target.uid,
+        `Deleted user profile ${target.email} (${target.role})`
+      );
+      onToast(`Removed user profile for ${target.displayName}.`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete user profile.');
+    }
+  };
+
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -218,46 +288,65 @@ export const AdminGovernanceModule: React.FC<Props> = ({
 
   return (
     <div className="space-y-6">
-      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
         <div>
           <h2 className="text-lg font-bold text-slate-900">Central Administration, RBAC & System Documentation</h2>
           <p className="text-xs text-slate-600 mt-1">
-            Multi-hospital onboarding, 10-role access control, configurable surveillance thresholds, immutable audit logs, and PostgreSQL / deployment architecture.
+            Multi-hospital onboarding, 10-role access control, full CRUD governance, configurable surveillance thresholds, immutable audit logs, and official PDF documentation.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-lg">
-          {([
-            ['facilities', 'Hospitals', Building2],
-            ['staff', pendingStaff.length > 0 ? `Users & RBAC (${pendingStaff.length} Pending)` : 'Users & RBAC', ShieldCheck],
-            ['settings', 'Thresholds', Sliders],
-            ['audit', 'Audit Logs', FileText],
-            ['docs', 'SQL & Docs', FileText],
-          ] as const).map(([key, label, Icon]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setTab(key)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                tab === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              {label}
-            </button>
-          ))}
+        <div className="no-print flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              downloadSystemDocumentationPdf({ user, facilities, settings });
+              onToast('Generated and downloaded JaysalTech_Central_Hospital_Hub_Documentation.pdf');
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Download PDF Docs
+          </button>
+          <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-lg">
+            {([
+              ['facilities', 'Hospitals', Building2],
+              ['staff', pendingStaff.length > 0 ? `Users & RBAC (${pendingStaff.length} Pending)` : 'Users & RBAC', ShieldCheck],
+              ['settings', 'Thresholds', Sliders],
+              ['audit', 'Audit Logs', FileText],
+              ['docs', 'SQL & Docs', FileText],
+            ] as const).map(([key, label, Icon]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  tab === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       {tab === 'facilities' && (
         <div className="space-y-4">
           <div className="flex justify-end">
-            <button type="button" onClick={() => setShowFacForm(!showFacForm)} className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800">
+            <button type="button" onClick={openNewFacility} className="no-print inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800">
               <Plus className="w-3.5 h-3.5" /> Register Hospital / Clinic
             </button>
           </div>
 
           {showFacForm && (
             <form onSubmit={handleRegisterFacility} className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+              <div className="sm:col-span-3 flex items-center justify-between border-b border-slate-100 pb-2">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  {editingFac ? `Edit Hospital · ${editingFac.name}` : 'Register New Hospital / Healthcare Facility'}
+                </h3>
+                <button type="button" onClick={() => { setShowFacForm(false); setEditingFac(null); }} className="text-xs text-slate-500">Close</button>
+              </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Facility Name</label>
                 <input type="text" required value={facName} onChange={(e) => setFacName(e.target.value)} placeholder="e.g., Kailahun District Hospital" className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg" />
@@ -289,8 +378,11 @@ export const AdminGovernanceModule: React.FC<Props> = ({
                 <label className="block text-xs font-medium text-slate-700 mb-1">Departments (comma-separated)</label>
                 <input type="text" value={facDepts} onChange={(e) => setFacDepts(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg" />
               </div>
-              <div className="sm:col-span-3 flex justify-end">
-                <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">Submit Facility Registration</button>
+              <div className="sm:col-span-3 flex justify-end gap-2">
+                <button type="button" onClick={() => { setShowFacForm(false); setEditingFac(null); }} className="px-3 py-2 text-xs border border-slate-300 rounded-lg">Cancel</button>
+                <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">
+                  {editingFac ? 'Save Facility Changes' : 'Submit Facility Registration'}
+                </button>
               </div>
             </form>
           )}
@@ -304,34 +396,47 @@ export const AdminGovernanceModule: React.FC<Props> = ({
                   <th className="py-2.5 px-4 font-semibold">District</th>
                   <th className="py-2.5 px-4 font-semibold">Departments</th>
                   <th className="py-2.5 px-4 font-semibold">Status</th>
-                  <th className="py-2.5 px-4 font-semibold text-right">Governance</th>
+                  <th className="no-print py-2.5 px-4 font-semibold text-right">Governance</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {facilities.map((f) => (
-                  <tr key={f.id} className="hover:bg-slate-50">
-                    <td className="py-2.5 px-4 font-mono text-slate-700">{f.code}</td>
-                    <td className="py-2.5 px-4">
-                      <div className="font-semibold text-slate-900">{f.name}</div>
-                      <div className="text-[11px] text-slate-500">{f.type} · {f.bedCapacity} beds</div>
-                    </td>
-                    <td className="py-2.5 px-4 text-slate-700">{f.district}</td>
-                    <td className="py-2.5 px-4 text-slate-600 max-w-xs">{f.departments.join(' · ')}</td>
-                    <td className="py-2.5 px-4 font-semibold text-slate-800">{f.status}</td>
-                    <td className="py-2.5 px-4 text-right space-x-2">
-                      {canManageFacilities && f.status !== 'Approved' && (
-                        <button type="button" onClick={() => handleFacilityStatus(f, 'Approved')} className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-700 text-white rounded">
-                          <CheckCircle2 className="w-3 h-3" /> Approve
-                        </button>
-                      )}
-                      {canManageFacilities && f.status === 'Approved' && (
-                        <button type="button" onClick={() => handleFacilityStatus(f, 'Suspended')} className="px-2.5 py-1 border border-slate-300 rounded text-slate-700">
-                          Suspend
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {facilities.map((f) => {
+                  const canEditFac = isSuperAdmin || (canManageFacilities && f.id === user.facilityId);
+                  return (
+                    <tr key={f.id} className="hover:bg-slate-50">
+                      <td className="py-2.5 px-4 font-mono text-slate-700">{f.code}</td>
+                      <td className="py-2.5 px-4">
+                        <div className="font-semibold text-slate-900">{f.name}</div>
+                        <div className="text-[11px] text-slate-500">{f.type} · {f.bedCapacity} beds · <span className="font-mono">{f.id}</span></div>
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-700">{f.district}</td>
+                      <td className="py-2.5 px-4 text-slate-600 max-w-xs">{f.departments.join(' · ')}</td>
+                      <td className="py-2.5 px-4 font-semibold text-slate-800">{f.status}</td>
+                      <td className="no-print py-2.5 px-4 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1.5">
+                          {canEditFac && (
+                            <button type="button" onClick={() => openEditFacility(f)} className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded hover:bg-teal-100">
+                              <Edit3 className="w-3 h-3" /> Edit
+                            </button>
+                          )}
+                          {isSuperAdmin && f.status !== 'Approved' && (
+                            <button type="button" onClick={() => handleFacilityStatus(f, 'Approved')} className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-700 text-white rounded text-[11px]">
+                              <CheckCircle2 className="w-3 h-3" /> Approve
+                            </button>
+                          )}
+                          {isSuperAdmin && f.status === 'Approved' && (
+                            <button type="button" onClick={() => handleFacilityStatus(f, 'Suspended')} className="px-2 py-1 border border-slate-300 rounded text-slate-700 text-[11px]">
+                              Suspend
+                            </button>
+                          )}
+                          {isSuperAdmin && (
+                            <ConfirmDeleteButton compact onConfirm={() => handleDeleteFacility(f)} title={`Delete ${f.name}`} />
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -425,6 +530,7 @@ export const AdminGovernanceModule: React.FC<Props> = ({
                   <th className="py-2.5 px-4 font-semibold">Facility</th>
                   <th className="py-2.5 px-4 font-semibold">Current Role</th>
                   <th className="py-2.5 px-4 font-semibold">Approval Status</th>
+                  <th className="no-print py-2.5 px-4 font-semibold text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -432,6 +538,11 @@ export const AdminGovernanceModule: React.FC<Props> = ({
                   const canEditTarget =
                     canManageUsers &&
                     (isSuperAdmin || s.role !== 'Super Administrator');
+                  const canDeleteTarget =
+                    canAdminManageRecords &&
+                    s.uid !== user.uid &&
+                    s.email !== 'jaahwix@gmail.com' &&
+                    (isSuperAdmin || (s.facilityId === user.facilityId && s.role !== 'Super Administrator'));
                   return (
                     <tr key={s.uid}>
                       <td className="py-2.5 px-4">
@@ -481,6 +592,17 @@ export const AdminGovernanceModule: React.FC<Props> = ({
                           </select>
                         ) : (
                           <span className="text-emerald-700 font-medium">{s.status}</span>
+                        )}
+                      </td>
+                      <td className="no-print py-2.5 px-4 text-right whitespace-nowrap">
+                        {canDeleteTarget ? (
+                          <ConfirmDeleteButton
+                            compact
+                            onConfirm={() => handleDeleteStaffUser(s)}
+                            title={`Delete staff account ${s.displayName}`}
+                          />
+                        ) : (
+                          <span className="text-[11px] text-slate-400">Protected</span>
                         )}
                       </td>
                     </tr>
@@ -591,18 +713,57 @@ export const AdminGovernanceModule: React.FC<Props> = ({
               </button>
               <button
                 type="button"
-                onClick={() => downloadTextFile('PLATFORM_DOCUMENTATION.md', platformDocsMd, 'text/markdown')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-900 text-white rounded-lg hover:bg-slate-800"
+                onClick={() => {
+                  downloadSystemDocumentationPdf({ user, facilities, settings });
+                  onToast('Downloaded official PDF System Documentation.');
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-700 text-white rounded-lg hover:bg-emerald-800 whitespace-nowrap"
               >
-                <Download className="w-3.5 h-3.5" /> Download Docs
+                <Download className="w-3.5 h-3.5" /> Download PDF Documentation
               </button>
+              <button
+                type="button"
+                onClick={() => downloadTextFile('PLATFORM_DOCUMENTATION.md', platformDocsMd, 'text/markdown')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-900 text-white rounded-lg hover:bg-slate-800 whitespace-nowrap"
+              >
+                <Download className="w-3.5 h-3.5" /> Download Markdown
+              </button>
+            </div>
+          </div>
+
+          <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/60 space-y-3">
+            <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
+              <KeyRound className="w-4 h-4 text-teal-700" />
+              Hospital Admin Password & Credential Provisioning Playbook
+            </div>
+            <p className="text-xs text-slate-600">
+              Passwords are never hardcoded in source files; Firebase Authentication (<code className="font-mono bg-white px-1 py-0.5 border border-slate-200 rounded">wise-lamp-h3bk6</code>) hashes and stores all credentials securely. The master Super Administrator across all hospitals is <strong className="font-mono text-slate-900">jaahwix@gmail.com</strong> (Google Sign-In). To create or reset a Hospital Administrator password for any facility, use <strong>Register Staff Account</strong> on the login screen (selecting role <em>Hospital Administrator</em>, then approve under <em>Users & RBAC</em>) or add/reset the user in <strong>Firebase Console → Authentication → Users</strong>:
+            </p>
+            <div className="overflow-x-auto bg-white border border-slate-200 rounded-lg">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                  <tr>
+                    <th className="py-2 px-3 font-semibold">Code</th>
+                    <th className="py-2 px-3 font-semibold">Facility ID</th>
+                    <th className="py-2 px-3 font-semibold">Hospital Name</th>
+                    <th className="py-2 px-3 font-semibold">Recommended Admin Login</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+                  <tr><td className="py-2 px-3">SL-WAU-001</td><td className="py-2 px-3">fac_connaught_sl</td><td className="py-2 px-3 font-sans">Connaught National Referral Hospital</td><td className="py-2 px-3 text-teal-800">admin.connaught@jaysaltech.sl</td></tr>
+                  <tr><td className="py-2 px-3">SL-BO-002</td><td className="py-2 px-3">fac_bo_gov</td><td className="py-2 px-3 font-sans">Bo Government Regional Hospital</td><td className="py-2 px-3 text-teal-800">admin.bo@jaysaltech.sl</td></tr>
+                  <tr><td className="py-2 px-3">SL-KEN-003</td><td className="py-2 px-3">fac_kenema_gov</td><td className="py-2 px-3 font-sans">Kenema Government Hospital</td><td className="py-2 px-3 text-teal-800">admin.kenema@jaysaltech.sl</td></tr>
+                  <tr><td className="py-2 px-3">SL-BOM-004</td><td className="py-2 px-3">fac_makeni_reg</td><td className="py-2 px-3 font-sans">Makeni Regional Hospital</td><td className="py-2 px-3 text-teal-800">admin.makeni@jaysaltech.sl</td></tr>
+                  <tr><td className="py-2 px-3">SL-PLK-005</td><td className="py-2 px-3">fac_portloko_chc</td><td className="py-2 px-3 font-sans">Port Loko District Diagnostic & Health Centre</td><td className="py-2 px-3 text-teal-800">admin.portloko@jaysaltech.sl</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="border border-slate-200 rounded-lg p-4 space-y-1.5">
               <h4 className="font-semibold text-slate-900">Active Runtime Persistence & Auth</h4>
-              <p>Connected live to Firebase Firestore (Enterprise database) & Google OAuth via Firebase Authentication with email verification, RBAC role checks, and facility-level PII isolation (`authorizedUids` + Super Admin override).</p>
+              <p>Connected live to Firebase Firestore (Enterprise database) & Google OAuth via Firebase Authentication with email verification, RBAC role checks, and facility-level PII isolation (`authorizedUids` + Super/Hospital Admin authority).</p>
             </div>
             <div className="border border-slate-200 rounded-lg p-4 space-y-1.5">
               <h4 className="font-semibold text-slate-900">PostgreSQL / Supabase Migration Readiness</h4>

@@ -53,6 +53,14 @@ service cloud.firestore {
         userDoc().role == 'Hospital Administrator';
     }
 
+    function isFacilityRecordAdmin(data) {
+      return isHospitalAdmin() && data.facilityId == userDoc().facilityId;
+    }
+
+    function isFacilityReferralAdmin(data) {
+      return isHospitalAdmin() && (data.fromFacilityId == userDoc().facilityId || data.toFacilityId == userDoc().facilityId);
+    }
+
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -130,7 +138,7 @@ service cloud.firestore {
             incoming().facilityId == existing().facilityId &&
             existing().role != 'Super Administrator' &&
             incoming().role != 'Super Administrator' &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'department', 'status', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'department', 'status', 'updatedAt'])
           ) ||
           (
             request.auth.uid == userId &&
@@ -142,7 +150,10 @@ service cloud.firestore {
             )
           )
         );
-      allow delete: if isBootstrappedAdmin() && isValidId(userId);
+      allow delete: if isValidId(userId) && userId != request.auth.uid && existing().email != 'jaahwix@gmail.com' && (
+        isAdmin() ||
+        (isHospitalAdmin() && existing().facilityId == userDoc().facilityId && existing().role != 'Super Administrator')
+      );
     }
 
     // 2. Facilities
@@ -167,15 +178,16 @@ service cloud.firestore {
     }
 
     match /facilities/{facilityId} {
-      allow get: if isActiveUser() && isValidId(facilityId) && (isAdmin() || existing().status == 'Approved' || existing().createdByUid == request.auth.uid);
-      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().status == 'Approved' || existing().createdByUid == request.auth.uid);
+      allow get: if isActiveUser() && isValidId(facilityId) && (isAdmin() || existing().status == 'Approved' || existing().createdByUid == request.auth.uid || (isHospitalAdmin() && existing().id == userDoc().facilityId));
+      allow list: if isActiveUser() && (isAdmin() || existing().status == 'Approved' || existing().createdByUid == request.auth.uid || (isHospitalAdmin() && existing().id == userDoc().facilityId));
       allow create: if isActiveUser() && isValidId(facilityId) && isValidFacility(incoming()) &&
         incoming().id == facilityId && incoming().createdByUid == request.auth.uid;
       allow update: if isActiveUser() && isValidId(facilityId) && isValidFacility(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
         (
           isAdmin() ||
-          (existing().createdByUid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'district', 'chiefdom', 'address', 'phone', 'bedCapacity', 'departments', 'updatedAt']))
+          ((existing().createdByUid == request.auth.uid || (isHospitalAdmin() && existing().id == userDoc().facilityId)) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'code', 'type', 'district', 'chiefdom', 'address', 'phone', 'bedCapacity', 'departments', 'updatedAt']))
         );
       allow delete: if isAdmin() && isValidId(facilityId);
     }
@@ -209,16 +221,16 @@ service cloud.firestore {
     }
 
     match /patients/{patientId} {
-      allow get: if isActiveUser() && isValidId(patientId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow get: if isActiveUser() && isValidId(patientId) && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
       allow create: if isActiveUser() && isValidId(patientId) && isValidPatient(incoming()) &&
         incoming().id == patientId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
       allow update: if isActiveUser() && isValidId(patientId) && isValidPatient(incoming()) &&
         incoming().id == existing().id && incoming().patientUid == existing().patientUid &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || isAuthorizedRecord(existing())) &&
+        (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing())) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'dateOfBirth', 'gender', 'district', 'chiefdom', 'phone', 'emergencyContactName', 'emergencyContactPhone', 'bloodGroup', 'allergies', 'chronicConditions', 'insuranceProvider', 'insuranceNumber', 'authorizedUids', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(patientId);
+      allow delete: if isActiveUser() && isValidId(patientId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 4. Encounters
@@ -250,16 +262,16 @@ service cloud.firestore {
     }
 
     match /encounters/{encounterId} {
-      allow get: if isActiveUser() && isValidId(encounterId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow get: if isActiveUser() && isValidId(encounterId) && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
       allow create: if isActiveUser() && isValidId(encounterId) && isValidEncounter(incoming()) &&
         incoming().id == encounterId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
       allow update: if isActiveUser() && isValidId(encounterId) && isValidEncounter(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || (isAuthorizedRecord(existing()) && existing().status != 'Discharged')) &&
+        (isAdmin() || isFacilityRecordAdmin(existing()) || (isAuthorizedRecord(existing()) && existing().status != 'Discharged')) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['encounterType', 'department', 'clinicianName', 'chiefComplaint', 'vitalSigns', 'nursingNotes', 'diagnosis', 'treatmentPlan', 'dischargeSummary', 'status', 'wardBed', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(encounterId);
+      allow delete: if isActiveUser() && isValidId(encounterId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 5. Screening Campaigns
@@ -284,15 +296,15 @@ service cloud.firestore {
     }
 
     match /screeningCampaigns/{campaignId} {
-      allow get: if isActiveUser() && isValidId(campaignId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
-      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow get: if isActiveUser() && isValidId(campaignId) && (isAdmin() || isFacilityRecordAdmin(existing()) || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
       allow create: if isActiveUser() && isValidId(campaignId) && isValidCampaign(incoming()) &&
         incoming().id == campaignId && incoming().createdByUid == request.auth.uid;
       allow update: if isActiveUser() && isValidId(campaignId) && isValidCampaign(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || existing().createdByUid == request.auth.uid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'targetCount', 'screenedCount', 'endDate', 'status', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(campaignId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || existing().createdByUid == request.auth.uid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'district', 'targetCondition', 'targetCount', 'screenedCount', 'endDate', 'status', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(campaignId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 6. Screenings (Screening-to-Care Loop)
@@ -329,16 +341,16 @@ service cloud.firestore {
     }
 
     match /screenings/{screeningId} {
-      allow get: if isActiveUser() && isValidId(screeningId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow get: if isActiveUser() && isValidId(screeningId) && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
       allow create: if isActiveUser() && isValidId(screeningId) && isValidScreening(incoming()) &&
         incoming().id == screeningId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
       allow update: if isActiveUser() && isValidId(screeningId) && isValidScreening(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || isAuthorizedRecord(existing())) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['measurementSummary', 'resultClassification', 'riskLevel', 'journeyStage', 'referralId', 'appointmentDate', 'treatmentStatus', 'clinicianDecision', 'followUpCompleted', 'isOverdue', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(screeningId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['screeningType', 'measurementSummary', 'resultClassification', 'riskLevel', 'journeyStage', 'referralId', 'appointmentDate', 'treatmentStatus', 'clinicianDecision', 'followUpCompleted', 'isOverdue', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(screeningId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 7. Follow-Up Tasks
@@ -367,16 +379,16 @@ service cloud.firestore {
     }
 
     match /followUpTasks/{taskId} {
-      allow get: if isActiveUser() && isValidId(taskId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow get: if isActiveUser() && isValidId(taskId) && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
       allow create: if isActiveUser() && isValidId(taskId) && isValidFollowUpTask(incoming()) &&
         incoming().id == taskId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
       allow update: if isActiveUser() && isValidId(taskId) && isValidFollowUpTask(incoming()) &&
         incoming().id == existing().id && incoming().screeningId == existing().screeningId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || isAuthorizedRecord(existing())) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['priority', 'dueDate', 'assignedRole', 'status', 'resolutionNotes', 'missedCount', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(taskId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['taskTitle', 'priority', 'dueDate', 'assignedRole', 'status', 'resolutionNotes', 'missedCount', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(taskId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 8. Referrals & NHIE Exchange
@@ -406,16 +418,16 @@ service cloud.firestore {
     }
 
     match /referrals/{referralId} {
-      allow get: if isActiveUser() && isValidId(referralId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow get: if isActiveUser() && isValidId(referralId) && (isAdmin() || isFacilityReferralAdmin(existing()) || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && (isAdmin() || isFacilityReferralAdmin(existing()) || isAuthorizedRecord(existing()));
       allow create: if isActiveUser() && isValidId(referralId) && isValidReferral(incoming()) &&
         incoming().id == referralId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
       allow update: if isActiveUser() && isValidId(referralId) && isValidReferral(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || isAuthorizedRecord(existing())) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['exchangeAuthorized', 'status', 'appointmentDate', 'authorizedUids', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(referralId);
+        (isAdmin() || isFacilityReferralAdmin(existing()) || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['toFacilityId', 'toFacilityName', 'specialty', 'urgency', 'reason', 'exchangeAuthorized', 'status', 'appointmentDate', 'authorizedUids', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(referralId) && (isAdmin() || isFacilityReferralAdmin(existing()));
     }
 
     // 9. Laboratory Orders
@@ -444,16 +456,16 @@ service cloud.firestore {
     }
 
     match /labOrders/{orderId} {
-      allow get: if isActiveUser() && isValidId(orderId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow get: if isActiveUser() && isValidId(orderId) && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
       allow create: if isActiveUser() && isValidId(orderId) && isValidLabOrder(incoming()) &&
         incoming().id == orderId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
       allow update: if isActiveUser() && isValidId(orderId) && isValidLabOrder(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || (isAuthorizedRecord(existing()) && existing().status != 'Approved')) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['sampleStatus', 'resultValue', 'referenceRange', 'abnormalFlag', 'status', 'approvedBy', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(orderId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || (isAuthorizedRecord(existing()) && existing().status != 'Approved')) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['testName', 'referenceRange', 'sampleStatus', 'resultValue', 'abnormalFlag', 'status', 'approvedBy', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(orderId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 10. Pharmacy Medicines
@@ -479,15 +491,15 @@ service cloud.firestore {
     }
 
     match /medicines/{medicineId} {
-      allow get: if isActiveUser() && isValidId(medicineId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
-      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow get: if isActiveUser() && isValidId(medicineId) && (isAdmin() || isFacilityRecordAdmin(existing()) || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
       allow create: if isActiveUser() && isValidId(medicineId) && isValidMedicine(incoming()) &&
         incoming().id == medicineId && incoming().createdByUid == request.auth.uid;
       allow update: if isActiveUser() && isValidId(medicineId) && isValidMedicine(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || existing().createdByUid == request.auth.uid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['stockQuantity', 'reorderLevel', 'batchNumber', 'expiryDate', 'unitPrice', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(medicineId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || existing().createdByUid == request.auth.uid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'genericName', 'category', 'stockQuantity', 'reorderLevel', 'batchNumber', 'expiryDate', 'unitPrice', 'unit', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(medicineId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 11. Prescriptions
@@ -516,16 +528,16 @@ service cloud.firestore {
     }
 
     match /prescriptions/{prescriptionId} {
-      allow get: if isActiveUser() && isValidId(prescriptionId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow get: if isActiveUser() && isValidId(prescriptionId) && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
       allow create: if isActiveUser() && isValidId(prescriptionId) && isValidPrescription(incoming()) &&
         incoming().id == prescriptionId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
       allow update: if isActiveUser() && isValidId(prescriptionId) && isValidPrescription(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || (isAuthorizedRecord(existing()) && existing().status == 'Pending')) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'dispensedBy', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(prescriptionId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || (isAuthorizedRecord(existing()) && existing().status == 'Pending')) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['dosage', 'frequency', 'quantity', 'status', 'dispensedBy', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(prescriptionId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 12. Blood Donors
@@ -550,15 +562,15 @@ service cloud.firestore {
     }
 
     match /bloodDonors/{donorId} {
-      allow get: if isActiveUser() && isValidId(donorId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow get: if isActiveUser() && isValidId(donorId) && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
       allow create: if isActiveUser() && isValidId(donorId) && isValidBloodDonor(incoming()) &&
         incoming().id == donorId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
       allow update: if isActiveUser() && isValidId(donorId) && isValidBloodDonor(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || isAuthorizedRecord(existing())) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['lastDonationDate', 'eligibilityStatus', 'unitsDonated', 'phone', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(donorId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['donorName', 'bloodGroup', 'district', 'lastDonationDate', 'eligibilityStatus', 'unitsDonated', 'phone', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(donorId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 13. Blood Inventory Units
@@ -582,15 +594,15 @@ service cloud.firestore {
     }
 
     match /bloodInventory/{unitId} {
-      allow get: if isActiveUser() && isValidId(unitId) && (isAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
-      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow get: if isActiveUser() && isValidId(unitId) && (isAdmin() || isFacilityRecordAdmin(existing()) || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || existing().createdByUid == request.auth.uid || existing().isSynthetic == true);
       allow create: if isActiveUser() && isValidId(unitId) && isValidBloodUnit(incoming()) &&
         incoming().id == unitId && incoming().createdByUid == request.auth.uid;
       allow update: if isActiveUser() && isValidId(unitId) && isValidBloodUnit(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || existing().createdByUid == request.auth.uid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'crossMatchPatientName', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(unitId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || existing().createdByUid == request.auth.uid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['bloodGroup', 'componentType', 'expiryDate', 'status', 'crossMatchPatientName', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(unitId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 14. Insurance Claims & Billing
@@ -617,16 +629,16 @@ service cloud.firestore {
     }
 
     match /insuranceClaims/{claimId} {
-      allow get: if isActiveUser() && isValidId(claimId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow get: if isActiveUser() && isValidId(claimId) && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
       allow create: if isActiveUser() && isValidId(claimId) && isValidInsuranceClaim(incoming()) &&
         incoming().id == claimId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
       allow update: if isActiveUser() && isValidId(claimId) && isValidInsuranceClaim(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || (isAuthorizedRecord(existing()) && existing().status != 'Paid')) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'paymentReference', 'amountSLL', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(claimId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || (isAuthorizedRecord(existing()) && existing().status != 'Paid')) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['providerName', 'policyNumber', 'serviceDescription', 'status', 'paymentReference', 'amountSLL', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(claimId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 15. Telemedicine Appointments
@@ -654,16 +666,16 @@ service cloud.firestore {
     }
 
     match /telemedicineAppointments/{appointmentId} {
-      allow get: if isActiveUser() && isValidId(appointmentId) && (isAdmin() || isAuthorizedRecord(existing()));
-      allow list: if isActiveUser() && isAuthorizedRecord(existing());
+      allow get: if isActiveUser() && isValidId(appointmentId) && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
+      allow list: if isActiveUser() && (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing()));
       allow create: if isActiveUser() && isValidId(appointmentId) && isValidTelemedicine(incoming()) &&
         incoming().id == appointmentId && incoming().createdByUid == request.auth.uid && request.auth.uid in incoming().authorizedUids;
       allow update: if isActiveUser() && isValidId(appointmentId) && isValidTelemedicine(incoming()) &&
         incoming().id == existing().id && incoming().patientId == existing().patientId &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || isAuthorizedRecord(existing())) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['scheduledDate', 'scheduledTime', 'consultationNotes', 'status', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(appointmentId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || isAuthorizedRecord(existing())) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['doctorName', 'specialty', 'scheduledDate', 'scheduledTime', 'consultationNotes', 'status', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(appointmentId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 16. Surveillance Records (Aggregate De-Identified Population Data)
@@ -691,14 +703,14 @@ service cloud.firestore {
 
     match /surveillanceRecords/{recordId} {
       allow get: if isActiveUser() && isValidId(recordId) && (isAdmin() || existing().isAggregate == true);
-      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().isAggregate == true);
+      allow list: if isActiveUser() && (isAdmin() || existing().isAggregate == true);
       allow create: if isActiveUser() && isValidId(recordId) && isValidSurveillanceRecord(incoming()) &&
         incoming().id == recordId && incoming().createdByUid == request.auth.uid;
       allow update: if isActiveUser() && isValidId(recordId) && isValidSurveillanceRecord(incoming()) &&
         incoming().id == existing().id && incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || existing().createdByUid == request.auth.uid) &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['reportedCases', 'baselineCases', 'workforceAbsenteeismPct', 'screeningCoveragePct', 'climateFactor', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(recordId);
+        (isAdmin() || isFacilityRecordAdmin(existing()) || existing().createdByUid == request.auth.uid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['district', 'condition', 'periodType', 'periodLabel', 'reportedCases', 'baselineCases', 'workforceAbsenteeismPct', 'screeningCoveragePct', 'climateFactor', 'updatedAt']);
+      allow delete: if isActiveUser() && isValidId(recordId) && (isAdmin() || isFacilityRecordAdmin(existing()));
     }
 
     // 17. Public Health Alerts
@@ -729,15 +741,15 @@ service cloud.firestore {
 
     match /publicHealthAlerts/{alertId} {
       allow get: if isActiveUser() && isValidId(alertId) && (isAdmin() || existing().isAggregate == true);
-      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().isAggregate == true);
+      allow list: if isActiveUser() && (isAdmin() || existing().isAggregate == true);
       allow create: if isActiveUser() && isValidId(alertId) && isValidPublicHealthAlert(incoming()) &&
         incoming().id == alertId && incoming().createdByUid == request.auth.uid;
       allow update: if isActiveUser() && isValidId(alertId) && isValidPublicHealthAlert(incoming()) &&
         incoming().id == existing().id && incoming().referenceNumber == existing().referenceNumber &&
         incoming().createdByUid == existing().createdByUid && incoming().createdAt == existing().createdAt &&
-        (isAdmin() || (existing().isAggregate == true && existing().verificationStatus != 'Resolved')) &&
+        (isAdmin() || isHospitalAdmin() || (existing().isAggregate == true && existing().verificationStatus != 'Resolved')) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['verificationStatus', 'assignedOfficer', 'resolutionNotes', 'severity', 'updatedAt']);
-      allow delete: if isAdmin() && isValidId(alertId);
+      allow delete: if (isAdmin() || isHospitalAdmin()) && isValidId(alertId);
     }
 
     // 18. Audit Logs (Append-Only)
@@ -757,8 +769,8 @@ service cloud.firestore {
     }
 
     match /auditLogs/{logId} {
-      allow get: if isActiveUser() && isValidId(logId) && (isAdmin() || existing().actorUid == request.auth.uid);
-      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().actorUid == request.auth.uid);
+      allow get: if isActiveUser() && isValidId(logId) && (isAdmin() || (isHospitalAdmin() && existing().facilityId == userDoc().facilityId) || existing().actorUid == request.auth.uid);
+      allow list: if isActiveUser() && (isAdmin() || (isHospitalAdmin() && existing().facilityId == userDoc().facilityId) || existing().actorUid == request.auth.uid);
       allow create: if isActiveUser() && isValidId(logId) && isValidAuditLog(incoming()) &&
         incoming().id == logId && incoming().actorUid == request.auth.uid;
       allow update, delete: if false;
@@ -782,7 +794,7 @@ service cloud.firestore {
 
     match /platformSettings/{settingId} {
       allow get: if isActiveUser() && isValidId(settingId) && (isAdmin() || settingId == 'global');
-      allow list: if isActiveUser() && (isBootstrappedAdmin() || existing().id == 'global');
+      allow list: if isActiveUser() && (isAdmin() || existing().id == 'global');
       allow create, update: if isActiveUser() && isValidId(settingId) && isValidPlatformSettings(incoming()) &&
         incoming().id == settingId && incoming().updatedByUid == request.auth.uid && isAdmin();
       allow delete: if false;

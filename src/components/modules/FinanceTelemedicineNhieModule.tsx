@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Download, Printer, ArrowLeftRight, FileCode } from 'lucide-react';
+import { Plus, Download, Printer, ArrowLeftRight, FileCode, Edit3 } from 'lucide-react';
 import {
   clampStr,
   makeSafeId,
@@ -15,8 +15,9 @@ import {
   type TelemedicineAppointment,
   type UserProfile,
 } from '../../types/hub';
-import { safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
+import { safeDeleteDoc, safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
 import { buildFhirR4Bundle, exportToCsv, triggerPrintReport } from '../../lib/exportUtils';
+import { ConfirmDeleteButton } from '../ConfirmDeleteButton';
 
 interface Props {
   mode: 'insurance' | 'telemedicine' | 'nhie-analytics';
@@ -32,6 +33,7 @@ interface Props {
   telemedicine: TelemedicineAppointment[];
   referrals: Referral[];
   canManageClaims: boolean;
+  canAdminManageRecords?: boolean;
   onLogAudit: (action: string, resourceType: string, resourceId: string, details: string) => Promise<void>;
   onToast: (msg: string) => void;
   onOpenPrintPreview?: () => void;
@@ -51,12 +53,14 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
   telemedicine,
   referrals,
   canManageClaims,
+  canAdminManageRecords = false,
   onLogAudit,
   onToast,
   onOpenPrintPreview,
 }) => {
   // Claims state
   const [showClaimForm, setShowClaimForm] = useState(false);
+  const [editingClaim, setEditingClaim] = useState<InsuranceClaim | null>(null);
   const [clmPatId, setClmPatId] = useState(patients[0]?.id || '');
   const [clmProvider, setClmProvider] = useState('NASSIT National Health Scheme');
   const [clmDesc, setClmDesc] = useState('');
@@ -64,6 +68,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
 
   // Telemedicine state
   const [showTelForm, setShowTelForm] = useState(false);
+  const [editingTel, setEditingTel] = useState<TelemedicineAppointment | null>(null);
   const [telPatId, setTelPatId] = useState(patients[0]?.id || '');
   const [telDoctor, setTelDoctor] = useState('Dr. Lansana Turay');
   const [telSpecialty, setTelSpecialty] = useState('Internal Medicine');
@@ -73,6 +78,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
 
   // NHIE Referral state
   const [showRefForm, setShowRefForm] = useState(false);
+  const [editingRef, setEditingRef] = useState<Referral | null>(null);
   const [refPatId, setRefPatId] = useState(patients[0]?.id || '');
   const [refToFacId, setRefToFacId] = useState(facilities[0]?.id || user.facilityId);
   const [refSpec, setRefSpec] = useState('Cardiology & Internal Medicine');
@@ -88,6 +94,25 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
 
   const handleCreateClaim = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (editingClaim) {
+      try {
+        await safeUpdateDoc('insuranceClaims', editingClaim.id, {
+          providerName: clampStr(clmProvider, 120),
+          serviceDescription: clampStr(clmDesc, 240),
+          amountSLL: Math.max(0, Number(clmAmount) || 0),
+          updatedAt: new Date().toISOString(),
+        });
+        await onLogAudit('UPDATE_CLAIM', 'InsuranceClaim', editingClaim.id, `Updated claim ${editingClaim.id}`);
+        setEditingClaim(null);
+        setShowClaimForm(false);
+        setClmDesc('');
+        onToast('Insurance claim updated.');
+      } catch (err) {
+        onToast(err instanceof Error ? err.message : 'Unable to update insurance claim.');
+      }
+      return;
+    }
+
     const pat = patients.find((p) => p.id === effectiveClmPatId);
     if (!pat) {
       onToast('Please register or select a patient first.');
@@ -125,6 +150,16 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
     }
   };
 
+  const handleDeleteClaim = async (claim: InsuranceClaim) => {
+    try {
+      await safeDeleteDoc('insuranceClaims', claim.id);
+      await onLogAudit('DELETE_CLAIM', 'InsuranceClaim', claim.id, `Deleted claim for ${claim.patientName}`);
+      onToast('Insurance claim deleted.');
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete claim.');
+    }
+  };
+
   const handleUpdateClaimStatus = async (claim: InsuranceClaim, status: InsuranceClaim['status']) => {
     try {
       const payRef = status === 'Paid' ? `PAY-${Date.now().toString().slice(-6)}` : claim.paymentReference || '';
@@ -142,6 +177,27 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
 
   const handleCreateTelemedicine = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (editingTel) {
+      try {
+        await safeUpdateDoc('telemedicineAppointments', editingTel.id, {
+          doctorName: clampStr(telDoctor, 140),
+          specialty: clampStr(telSpecialty, 100),
+          scheduledDate: telDate,
+          scheduledTime: telTime,
+          consultationNotes: clampStr(telNotes, 600),
+          updatedAt: new Date().toISOString(),
+        });
+        await onLogAudit('UPDATE_TELEMEDICINE', 'TelemedicineAppointment', editingTel.id, `Updated consult for ${editingTel.patientName}`);
+        setEditingTel(null);
+        setShowTelForm(false);
+        setTelNotes('');
+        onToast('Telemedicine consultation updated.');
+      } catch (err) {
+        onToast(err instanceof Error ? err.message : 'Unable to update telemedicine appointment.');
+      }
+      return;
+    }
+
     const pat = patients.find((p) => p.id === effectiveTelPatId);
     if (!pat) {
       onToast('Please register or select a patient first.');
@@ -180,6 +236,16 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
     }
   };
 
+  const handleDeleteTelemedicine = async (appt: TelemedicineAppointment) => {
+    try {
+      await safeDeleteDoc('telemedicineAppointments', appt.id);
+      await onLogAudit('DELETE_TELEMEDICINE', 'TelemedicineAppointment', appt.id, `Deleted telemedicine appointment for ${appt.patientName}`);
+      onToast('Telemedicine appointment deleted.');
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete appointment.');
+    }
+  };
+
   const handleTelemedicineStatus = async (appt: TelemedicineAppointment, status: TelemedicineAppointment['status']) => {
     try {
       await safeUpdateDoc('telemedicineAppointments', appt.id, {
@@ -195,8 +261,29 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
 
   const handleCreateReferral = async (e: React.FormEvent) => {
     e.preventDefault();
-    const pat = patients.find((p) => p.id === effectiveRefPatId);
     const toFac = facilities.find((f) => f.id === effectiveRefToFacId);
+    if (editingRef) {
+      try {
+        await safeUpdateDoc('referrals', editingRef.id, {
+          toFacilityId: effectiveRefToFacId || editingRef.toFacilityId,
+          toFacilityName: toFac?.name || editingRef.toFacilityName || 'Receiving Referral Hospital',
+          specialty: clampStr(refSpec, 100),
+          urgency: refUrgency,
+          reason: clampStr(refReason, 400),
+          updatedAt: new Date().toISOString(),
+        });
+        await onLogAudit('UPDATE_NHIE_REFERRAL', 'Referral', editingRef.id, `Updated referral for ${editingRef.patientName}`);
+        setEditingRef(null);
+        setShowRefForm(false);
+        setRefReason('');
+        onToast('Inter-facility referral updated.');
+      } catch (err) {
+        onToast(err instanceof Error ? err.message : 'Unable to update referral.');
+      }
+      return;
+    }
+
+    const pat = patients.find((p) => p.id === effectiveRefPatId);
     if (!pat) {
       onToast('Please register or select a patient first.');
       return;
@@ -233,6 +320,16 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
       onToast('Authorized inter-facility referral created.');
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Unable to create inter-facility referral.');
+    }
+  };
+
+  const handleDeleteReferral = async (r: Referral) => {
+    try {
+      await safeDeleteDoc('referrals', r.id);
+      await onLogAudit('DELETE_NHIE_REFERRAL', 'Referral', r.id, `Deleted referral for ${r.patientName}`);
+      onToast('NHIE referral deleted.');
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete referral.');
     }
   };
 
@@ -287,7 +384,17 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
               <Download className="w-3.5 h-3.5" /> Export Claims CSV
             </button>
             {canManageClaims && (
-              <button type="button" onClick={() => setShowClaimForm(!showClaimForm)} className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingClaim(null);
+                  setClmProvider('NASSIT National Health Scheme');
+                  setClmDesc('');
+                  setClmAmount('850');
+                  setShowClaimForm(!showClaimForm);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800"
+              >
                 <Plus className="w-3.5 h-3.5" /> Create Claim
               </button>
             )}
@@ -313,13 +420,15 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
 
         {showClaimForm && (
           <form onSubmit={handleCreateClaim} className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Patient</label>
-              <select required value={effectiveClmPatId} onChange={(e) => setClmPatId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
-                {patients.length === 0 && <option value="">No patients registered</option>}
-                {patients.map((p) => <option key={p.id} value={p.id}>{p.fullName} ({p.patientUid})</option>)}
-              </select>
-            </div>
+            {!editingClaim && (
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Patient</label>
+                <select required value={effectiveClmPatId} onChange={(e) => setClmPatId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
+                  {patients.length === 0 && <option value="">No patients registered</option>}
+                  {patients.map((p) => <option key={p.id} value={p.id}>{p.fullName} ({p.patientUid})</option>)}
+                </select>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Insurer / Scheme</label>
               <input type="text" required value={clmProvider} onChange={(e) => setClmProvider(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg" />
@@ -333,7 +442,12 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
                 <label className="block text-xs font-medium text-slate-700 mb-1">Amount (SLE)</label>
                 <input type="number" min={0} required value={clmAmount} onChange={(e) => setClmAmount(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg font-mono" />
               </div>
-              <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">Submit</button>
+              {editingClaim && (
+                <button type="button" onClick={() => { setShowClaimForm(false); setEditingClaim(null); }} className="px-3 py-2 text-xs border border-slate-300 rounded-lg">Cancel</button>
+              )}
+              <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">
+                {editingClaim ? 'Update' : 'Submit'}
+              </button>
             </div>
           </form>
         )}
@@ -347,7 +461,7 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
                 <th className="py-2.5 px-4 font-semibold">Service Line</th>
                 <th className="py-2.5 px-4 font-semibold text-right">Amount (SLE)</th>
                 <th className="py-2.5 px-4 font-semibold">Status</th>
-                <th className="no-print py-2.5 px-4 font-semibold text-right">Adjudication</th>
+                <th className="no-print py-2.5 px-4 font-semibold text-right">Adjudication & Admin</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -374,6 +488,24 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
                     {canManageClaims && c.status === 'Approved' && (
                       <button type="button" onClick={() => handleUpdateClaimStatus(c, 'Paid')} className="px-2.5 py-1 text-xs bg-emerald-700 text-white rounded">Record Payment</button>
                     )}
+                    {canAdminManageRecords && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingClaim(c);
+                            setClmProvider(c.providerName);
+                            setClmDesc(c.serviceDescription);
+                            setClmAmount(String(c.amountSLL));
+                            setShowClaimForm(true);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded hover:bg-teal-100"
+                        >
+                          <Edit3 className="w-3 h-3" /> Edit
+                        </button>
+                        <ConfirmDeleteButton compact onConfirm={() => handleDeleteClaim(c)} title={`Delete claim for ${c.patientName}`} />
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -394,20 +526,34 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
               Manage specialist virtual appointments and clinical notes. Live WebRTC video transport requires configuring an external licensed telehealth media gateway.
             </p>
           </div>
-          <button type="button" onClick={() => setShowTelForm(!showTelForm)} className="no-print inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 whitespace-nowrap">
+          <button
+            type="button"
+            onClick={() => {
+              setEditingTel(null);
+              setTelDoctor('Dr. Lansana Turay');
+              setTelSpecialty('Internal Medicine');
+              setTelDate('2026-11-24');
+              setTelTime('11:00');
+              setTelNotes('');
+              setShowTelForm(!showTelForm);
+            }}
+            className="no-print inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 whitespace-nowrap"
+          >
             <Plus className="w-3.5 h-3.5" /> Schedule Virtual Consult
           </button>
         </div>
 
         {showTelForm && (
           <form onSubmit={handleCreateTelemedicine} className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Patient</label>
-              <select required value={effectiveTelPatId} onChange={(e) => setTelPatId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
-                {patients.length === 0 && <option value="">No patients registered</option>}
-                {patients.map((p) => <option key={p.id} value={p.id}>{p.fullName}</option>)}
-              </select>
-            </div>
+            {!editingTel && (
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Patient</label>
+                <select required value={effectiveTelPatId} onChange={(e) => setTelPatId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
+                  {patients.length === 0 && <option value="">No patients registered</option>}
+                  {patients.map((p) => <option key={p.id} value={p.id}>{p.fullName}</option>)}
+                </select>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Consulting Doctor</label>
               <input type="text" required value={telDoctor} onChange={(e) => setTelDoctor(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg" />
@@ -424,7 +570,14 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
               <label className="block text-xs font-medium text-slate-700 mb-1">Time</label>
               <input type="time" required value={telTime} onChange={(e) => setTelTime(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg" />
             </div>
-            <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">Book Slot</button>
+            <div className="flex gap-2">
+              {editingTel && (
+                <button type="button" onClick={() => { setShowTelForm(false); setEditingTel(null); }} className="px-3 py-2 text-xs border border-slate-300 rounded-lg">Cancel</button>
+              )}
+              <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg whitespace-nowrap">
+                {editingTel ? 'Save Changes' : 'Book Slot'}
+              </button>
+            </div>
           </form>
         )}
 
@@ -471,6 +624,26 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
                     </button>
                   </>
                 )}
+                {canAdminManageRecords && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingTel(t);
+                        setTelDoctor(t.doctorName);
+                        setTelSpecialty(t.specialty || '');
+                        setTelDate(t.scheduledDate);
+                        setTelTime(t.scheduledTime);
+                        setTelNotes(t.consultationNotes || '');
+                        setShowTelForm(true);
+                      }}
+                      className="no-print inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded hover:bg-teal-100"
+                    >
+                      <Edit3 className="w-3 h-3" /> Edit
+                    </button>
+                    <ConfirmDeleteButton compact onConfirm={() => handleDeleteTelemedicine(t)} title={`Delete appointment for ${t.patientName}`} />
+                  </>
+                )}
               </div>
             </div>
           ))}
@@ -512,7 +685,17 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
           </p>
         </div>
         <div className="no-print flex flex-wrap items-center gap-2 shrink-0">
-          <button type="button" onClick={() => setShowRefForm(!showRefForm)} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800">
+          <button
+            type="button"
+            onClick={() => {
+              setEditingRef(null);
+              setRefSpec('Cardiology & Internal Medicine');
+              setRefUrgency('Urgent');
+              setRefReason('');
+              setShowRefForm(!showRefForm);
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800"
+          >
             <ArrowLeftRight className="w-3.5 h-3.5" /> New NHIE Referral
           </button>
           <button
@@ -540,13 +723,15 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
 
       {showRefForm && (
         <form onSubmit={handleCreateReferral} className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Patient</label>
-            <select required value={effectiveRefPatId} onChange={(e) => setRefPatId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
-              {patients.length === 0 && <option value="">No patients registered</option>}
-              {patients.map((p) => <option key={p.id} value={p.id}>{p.fullName} ({p.patientUid})</option>)}
-            </select>
-          </div>
+          {!editingRef && (
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Patient</label>
+              <select required value={effectiveRefPatId} onChange={(e) => setRefPatId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
+                {patients.length === 0 && <option value="">No patients registered</option>}
+                {patients.map((p) => <option key={p.id} value={p.id}>{p.fullName} ({p.patientUid})</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-slate-700 mb-1">Receiving Facility</label>
             <select value={effectiveRefToFacId} onChange={(e) => setRefToFacId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
@@ -568,7 +753,12 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
           </div>
           <div className="flex gap-2 items-end">
             <input type="text" required placeholder="Clinical reason" value={refReason} onChange={(e) => setRefReason(e.target.value)} className="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-lg" />
-            <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">Send</button>
+            {editingRef && (
+              <button type="button" onClick={() => { setShowRefForm(false); setEditingRef(null); }} className="px-3 py-2 text-xs border border-slate-300 rounded-lg">Cancel</button>
+            )}
+            <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">
+              {editingRef ? 'Save' : 'Send'}
+            </button>
           </div>
         </form>
       )}
@@ -666,6 +856,25 @@ export const FinanceTelemedicineNhieModule: React.FC<Props> = ({
                       >
                         Mark Completed
                       </button>
+                    )}
+                    {canAdminManageRecords && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingRef(r);
+                            setRefToFacId(r.toFacilityId);
+                            setRefSpec(r.specialty);
+                            setRefUrgency(r.urgency);
+                            setRefReason(r.reason);
+                            setShowRefForm(true);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded hover:bg-teal-100"
+                        >
+                          <Edit3 className="w-3 h-3" /> Edit
+                        </button>
+                        <ConfirmDeleteButton compact onConfirm={() => handleDeleteReferral(r)} title={`Delete referral for ${r.patientName}`} />
+                      </>
                     )}
                   </div>
                 </div>

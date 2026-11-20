@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, Printer, Play, Plus, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Download, Printer, Play, Plus, AlertTriangle, CheckCircle2, Edit3 } from 'lucide-react';
 import {
   SIERRA_LEONE_DISTRICTS,
   makeSafeId,
@@ -13,8 +13,9 @@ import {
   type VerificationStatus,
 } from '../../types/hub';
 import { SierraLeoneMap } from '../SierraLeoneMap';
-import { safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
+import { safeDeleteDoc, safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
 import { exportToCsv, triggerPrintReport } from '../../lib/exportUtils';
+import { ConfirmDeleteButton } from '../ConfirmDeleteButton';
 
 interface Props {
   user: UserProfile;
@@ -23,6 +24,7 @@ interface Props {
   alerts: PublicHealthAlert[];
   settings: PlatformSettings | null;
   canVerifyAlerts: boolean;
+  canAdminManageRecords?: boolean;
   onLogAudit: (action: string, resourceType: string, resourceId: string, details: string) => Promise<void>;
   onToast: (msg: string) => void;
   onOpenPrintPreview?: () => void;
@@ -45,6 +47,7 @@ export const PopulationHealthModule: React.FC<Props> = ({
   alerts,
   settings,
   canVerifyAlerts,
+  canAdminManageRecords = false,
   onLogAudit,
   onToast,
   onOpenPrintPreview,
@@ -54,8 +57,9 @@ export const PopulationHealthModule: React.FC<Props> = ({
   const [activeTab, setActiveTab] = useState<'alerts' | 'surveillance' | 'workforce'>('alerts');
   const [runningScan, setRunningScan] = useState(false);
 
-  // New surveillance report state
+  // New / Edit surveillance report state
   const [showReportForm, setShowReportForm] = useState(false);
+  const [editingSurveillance, setEditingSurveillance] = useState<SurveillanceRecord | null>(null);
   const [repFacilityId, setRepFacilityId] = useState(facilities[0]?.id || user.facilityId);
   const [repDistrict, setRepDistrict] = useState<string>('Western Area Urban');
   const [repCondition, setRepCondition] = useState<string>('Malaria');
@@ -183,9 +187,29 @@ export const PopulationHealthModule: React.FC<Props> = ({
   const handleSubmitSurveillance = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const now = new Date().toISOString();
+      if (editingSurveillance) {
+        await safeUpdateDoc('surveillanceRecords', editingSurveillance.id, {
+          district: clampStr(repDistrict, 80),
+          condition: clampStr(repCondition, 100),
+          periodType: repPeriodType,
+          periodLabel: clampStr(repPeriodLabel, 40),
+          reportedCases: Math.max(0, Number(repCases) || 0),
+          baselineCases: Math.max(0, Number(repBaseline) || 0),
+          workforceAbsenteeismPct: Math.min(100, Math.max(0, Number(repAbsenteeism) || 0)),
+          screeningCoveragePct: Math.min(100, Math.max(0, Number(repCoverage) || 0)),
+          climateFactor: clampStr(repClimate, 120),
+          updatedAt: now,
+        });
+        await onLogAudit('UPDATE_SURVEILLANCE_REPORT', 'SurveillanceRecord', editingSurveillance.id, `Updated ${repCondition} in ${repDistrict}`);
+        setEditingSurveillance(null);
+        setShowReportForm(false);
+        onToast('Surveillance aggregate updated.');
+        return;
+      }
+
       const fac = facilities.find((f) => f.id === effectiveRepFacilityId);
       const id = makeSafeId('srv');
-      const now = new Date().toISOString();
       const record: SurveillanceRecord = {
         id,
         facilityId: effectiveRepFacilityId,
@@ -212,6 +236,26 @@ export const PopulationHealthModule: React.FC<Props> = ({
       onToast('Surveillance aggregate saved. Run Anomaly Scan to evaluate thresholds.');
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Unable to save surveillance report.');
+    }
+  };
+
+  const handleDeleteSurveillance = async (rec: SurveillanceRecord) => {
+    try {
+      await safeDeleteDoc('surveillanceRecords', rec.id);
+      await onLogAudit('DELETE_SURVEILLANCE_REPORT', 'SurveillanceRecord', rec.id, `Deleted surveillance log ${rec.condition} (${rec.district})`);
+      onToast('Surveillance record deleted.');
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete surveillance record.');
+    }
+  };
+
+  const handleDeleteAlert = async (alert: PublicHealthAlert) => {
+    try {
+      await safeDeleteDoc('publicHealthAlerts', alert.id);
+      await onLogAudit('DELETE_PUBLIC_HEALTH_ALERT', 'PublicHealthAlert', alert.id, `Deleted alert ${alert.referenceNumber} (${alert.condition})`);
+      onToast(`Alert ${alert.referenceNumber} deleted.`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete alert.');
     }
   };
 
@@ -254,7 +298,10 @@ export const PopulationHealthModule: React.FC<Props> = ({
         <div className="no-print flex flex-wrap items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => setShowReportForm(!showReportForm)}
+            onClick={() => {
+              setEditingSurveillance(null);
+              setShowReportForm(!showReportForm);
+            }}
             className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 whitespace-nowrap"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -309,21 +356,27 @@ export const PopulationHealthModule: React.FC<Props> = ({
       {showReportForm && (
         <form onSubmit={handleSubmitSurveillance} className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <h3 className="text-sm font-semibold text-slate-900">Submit De-Identified Facility Surveillance Aggregate</h3>
-            <button type="button" onClick={() => setShowReportForm(false)} className="text-xs text-slate-500 hover:text-slate-800">
+            <h3 className="text-sm font-semibold text-slate-900">
+              {editingSurveillance
+                ? `Edit Surveillance Log · ${editingSurveillance.condition} (${editingSurveillance.district})`
+                : 'Submit De-Identified Facility Surveillance Aggregate'}
+            </h3>
+            <button type="button" onClick={() => { setShowReportForm(false); setEditingSurveillance(null); }} className="text-xs text-slate-500 hover:text-slate-800">
               Close
             </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Reporting Facility</label>
-              <select value={effectiveRepFacilityId} onChange={(e) => setRepFacilityId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
-                {facilities.map((f) => (
-                  <option key={f.id} value={f.id}>{f.name}</option>
-                ))}
-                {facilities.length === 0 && <option value={user.facilityId}>{user.facilityName || user.facilityId}</option>}
-              </select>
-            </div>
+            {!editingSurveillance && (
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Reporting Facility</label>
+                <select value={effectiveRepFacilityId} onChange={(e) => setRepFacilityId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
+                  {facilities.map((f) => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                  {facilities.length === 0 && <option value={user.facilityId}>{user.facilityName || user.facilityId}</option>}
+                </select>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">District</label>
               <select value={repDistrict} onChange={(e) => setRepDistrict(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
@@ -550,7 +603,7 @@ export const PopulationHealthModule: React.FC<Props> = ({
                   </div>
 
                   <div className="no-print flex items-center gap-2 shrink-0">
-                    {canVerifyAlerts ? (
+                    {(canVerifyAlerts || canAdminManageRecords) ? (
                       <button
                         type="button"
                         onClick={() => {
@@ -565,6 +618,9 @@ export const PopulationHealthModule: React.FC<Props> = ({
                       </button>
                     ) : (
                       <span className="text-xs text-slate-500">View-only (Public Health Officer required)</span>
+                    )}
+                    {canAdminManageRecords && (
+                      <ConfirmDeleteButton compact onConfirm={() => handleDeleteAlert(alert)} title={`Delete alert ${alert.referenceNumber}`} />
                     )}
                   </div>
                 </div>
@@ -585,6 +641,7 @@ export const PopulationHealthModule: React.FC<Props> = ({
                   <th className="py-2.5 px-4 font-semibold text-right">Reported</th>
                   <th className="py-2.5 px-4 font-semibold text-right">Baseline</th>
                   <th className="py-2.5 px-4 font-semibold text-right">Delta</th>
+                  {canAdminManageRecords && <th className="no-print py-2.5 px-4 font-semibold text-right">Admin Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -601,6 +658,32 @@ export const PopulationHealthModule: React.FC<Props> = ({
                       <td className={`py-2.5 px-4 text-right font-mono tabular-nums font-semibold ${delta >= 35 ? 'text-red-700' : 'text-teal-700'}`}>
                         {delta >= 0 ? '+' : ''}{delta.toFixed(1)}%
                       </td>
+                      {canAdminManageRecords && (
+                        <td className="no-print py-2.5 px-4 text-right whitespace-nowrap">
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingSurveillance(rec);
+                                setRepDistrict(rec.district);
+                                setRepCondition(rec.condition);
+                                setRepPeriodType(rec.periodType);
+                                setRepPeriodLabel(rec.periodLabel);
+                                setRepCases(String(rec.reportedCases));
+                                setRepBaseline(String(rec.baselineCases));
+                                setRepAbsenteeism(String(rec.workforceAbsenteeismPct ?? 0));
+                                setRepCoverage(String(rec.screeningCoveragePct ?? 70));
+                                setRepClimate(rec.climateFactor || '');
+                                setShowReportForm(true);
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded hover:bg-teal-100"
+                            >
+                              <Edit3 className="w-3 h-3" /> Edit
+                            </button>
+                            <ConfirmDeleteButton compact onConfirm={() => handleDeleteSurveillance(rec)} title={`Delete ${rec.condition} log`} />
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

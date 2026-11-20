@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Printer, CheckCircle2, AlertTriangle, PackagePlus } from 'lucide-react';
+import { Plus, Printer, CheckCircle2, AlertTriangle, PackagePlus, Edit3 } from 'lucide-react';
 import {
   SIERRA_LEONE_DISTRICTS,
   clampStr,
@@ -13,8 +13,9 @@ import {
   type Prescription,
   type UserProfile,
 } from '../../types/hub';
-import { safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
+import { safeDeleteDoc, safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
 import { triggerPrintReport } from '../../lib/exportUtils';
+import { ConfirmDeleteButton } from '../ConfirmDeleteButton';
 
 interface Props {
   mode: 'laboratory' | 'pharmacy' | 'blood-bank';
@@ -28,6 +29,7 @@ interface Props {
   bloodUnits: BloodUnit[];
   canApproveLab: boolean;
   canDispensePharmacy: boolean;
+  canAdminManageRecords?: boolean;
   onLogAudit: (action: string, resourceType: string, resourceId: string, details: string) => Promise<void>;
   onToast: (msg: string) => void;
   onOpenPrintPreview?: () => void;
@@ -45,6 +47,7 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
   bloodUnits,
   canApproveLab,
   canDispensePharmacy,
+  canAdminManageRecords = false,
   onLogAudit,
   onToast,
   onOpenPrintPreview,
@@ -55,11 +58,14 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
   const [testName, setTestName] = useState('Malaria Parasite Film & RDT');
   const [refRange, setRefRange] = useState('Negative');
   const [editingLab, setEditingLab] = useState<LabOrder | null>(null);
+  const [labEditTestName, setLabEditTestName] = useState('');
+  const [labEditRefRange, setLabEditRefRange] = useState('');
   const [labResultVal, setLabResultVal] = useState('');
   const [labAbnormal, setLabAbnormal] = useState(false);
 
   // Pharmacy state
   const [showMedForm, setShowMedForm] = useState(false);
+  const [editingMed, setEditingMed] = useState<Medicine | null>(null);
   const [medName, setMedName] = useState('');
   const [medCategory, setMedCategory] = useState('Antimalarial');
   const [medBatch, setMedBatch] = useState('');
@@ -68,6 +74,7 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
   const [medReorder, setMedReorder] = useState('100');
   const [medUnit, setMedUnit] = useState('tablets');
   const [showRxForm, setShowRxForm] = useState(false);
+  const [editingRx, setEditingRx] = useState<Prescription | null>(null);
   const [rxPatientId, setRxPatientId] = useState(patients[0]?.id || '');
   const [rxMedId, setRxMedId] = useState(medicines[0]?.id || '');
   const [rxDosage, setRxDosage] = useState('1 tablet');
@@ -76,10 +83,12 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
 
   // Blood bank state
   const [showDonorForm, setShowDonorForm] = useState(false);
+  const [editingDonor, setEditingDonor] = useState<BloodDonor | null>(null);
   const [donorName, setDonorName] = useState('');
   const [donorGroup, setDonorGroup] = useState<BloodDonor['bloodGroup']>('O+');
   const [donorDistrict, setDonorDistrict] = useState<string>('Western Area Urban');
   const [donorPhone, setDonorPhone] = useState('');
+  const [donorEligibility, setDonorEligibility] = useState<BloodDonor['eligibilityStatus']>('Eligible');
   const [showUnitForm, setShowUnitForm] = useState(false);
   const [unitGroup, setUnitGroup] = useState<BloodUnit['bloodGroup']>('O+');
   const [unitComponent, setUnitComponent] = useState('Packed Red Cells');
@@ -138,6 +147,8 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
     try {
       const now = new Date().toISOString();
       await safeUpdateDoc('labOrders', editingLab.id, {
+        testName: clampStr(labEditTestName || editingLab.testName, 140),
+        referenceRange: clampStr(labEditRefRange, 120),
         resultValue: clampStr(labResultVal, 160),
         abnormalFlag: labAbnormal,
         status: canApproveLab ? 'Approved' : 'Results Entered',
@@ -145,19 +156,49 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
         approvedBy: canApproveLab ? clampStr(user.displayName || user.email, 120) : '',
         updatedAt: now,
       });
-      await onLogAudit('UPDATE_LAB_RESULT', 'LabOrder', editingLab.id, `Result entered for ${editingLab.sampleCode}; abnormal=${labAbnormal}`);
+      await onLogAudit('UPDATE_LAB_RESULT', 'LabOrder', editingLab.id, `Result updated for ${editingLab.sampleCode}; abnormal=${labAbnormal}`);
       setEditingLab(null);
-      onToast('Laboratory result recorded.');
+      onToast('Laboratory record updated.');
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Unable to update laboratory result.');
+    }
+  };
+
+  const handleDeleteLabOrder = async (order: LabOrder) => {
+    try {
+      await safeDeleteDoc('labOrders', order.id);
+      await onLogAudit('DELETE_LAB_ORDER', 'LabOrder', order.id, `Deleted lab order ${order.sampleCode} (${order.testName})`);
+      onToast(`Lab order ${order.sampleCode} deleted.`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete lab order.');
     }
   };
 
   const handleAddMedicine = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const id = makeSafeId('med');
       const now = new Date().toISOString();
+      if (editingMed) {
+        await safeUpdateDoc('medicines', editingMed.id, {
+          name: clampStr(medName, 160),
+          genericName: clampStr(medName, 160),
+          category: clampStr(medCategory, 80),
+          batchNumber: clampStr(medBatch || editingMed.batchNumber, 60),
+          expiryDate: medExpiry,
+          stockQuantity: Math.max(0, Number(medStock) || 0),
+          reorderLevel: Math.max(0, Number(medReorder) || 50),
+          unit: clampStr(medUnit, 30),
+          updatedAt: now,
+        });
+        await onLogAudit('UPDATE_MEDICINE', 'Medicine', editingMed.id, `Updated medicine ${medName}`);
+        setEditingMed(null);
+        setShowMedForm(false);
+        setMedName('');
+        onToast('Medicine record updated.');
+        return;
+      }
+
+      const id = makeSafeId('med');
       const fac = facilities[0];
       const docData: Medicine = {
         id,
@@ -183,7 +224,17 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
       setMedName('');
       onToast('Medicine registered to pharmacy stock.');
     } catch (err) {
-      onToast(err instanceof Error ? err.message : 'Unable to register medicine.');
+      onToast(err instanceof Error ? err.message : 'Unable to save medicine.');
+    }
+  };
+
+  const handleDeleteMedicine = async (med: Medicine) => {
+    try {
+      await safeDeleteDoc('medicines', med.id);
+      await onLogAudit('DELETE_MEDICINE', 'Medicine', med.id, `Deleted medicine ${med.name} (Batch ${med.batchNumber})`);
+      onToast(`Medicine ${med.name} deleted.`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete medicine.');
     }
   };
 
@@ -203,6 +254,24 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
 
   const handleCreateRx = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (editingRx) {
+      try {
+        await safeUpdateDoc('prescriptions', editingRx.id, {
+          dosage: clampStr(rxDosage, 120),
+          frequency: clampStr(rxFreq, 120),
+          quantity: Math.max(1, Number(rxQty) || 1),
+          updatedAt: new Date().toISOString(),
+        });
+        await onLogAudit('UPDATE_PRESCRIPTION', 'Prescription', editingRx.id, `Updated prescription ${editingRx.medicineName}`);
+        setEditingRx(null);
+        setShowRxForm(false);
+        onToast('Prescription updated.');
+      } catch (err) {
+        onToast(err instanceof Error ? err.message : 'Unable to update prescription.');
+      }
+      return;
+    }
+
     const pat = patients.find((p) => p.id === effectiveRxPatientId);
     const med = medicines.find((m) => m.id === effectiveRxMedId);
     if (!pat || !med) {
@@ -242,6 +311,16 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
     }
   };
 
+  const handleDeleteRx = async (rx: Prescription) => {
+    try {
+      await safeDeleteDoc('prescriptions', rx.id);
+      await onLogAudit('DELETE_PRESCRIPTION', 'Prescription', rx.id, `Deleted prescription ${rx.medicineName} for ${rx.patientName}`);
+      onToast('Prescription deleted.');
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete prescription.');
+    }
+  };
+
   const handleDispenseRx = async (rx: Prescription) => {
     try {
       const med = medicines.find((m) => m.id === rx.medicineId);
@@ -278,8 +357,25 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
   const handleAddDonor = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const id = makeSafeId('bd');
       const now = new Date().toISOString();
+      if (editingDonor) {
+        await safeUpdateDoc('bloodDonors', editingDonor.id, {
+          donorName: clampStr(donorName, 160),
+          bloodGroup: donorGroup,
+          district: clampStr(donorDistrict, 80),
+          phone: clampStr(donorPhone, 40),
+          eligibilityStatus: donorEligibility,
+          updatedAt: now,
+        });
+        await onLogAudit('UPDATE_BLOOD_DONOR', 'BloodDonor', editingDonor.id, `Updated donor ${donorName} (${donorEligibility})`);
+        setEditingDonor(null);
+        setShowDonorForm(false);
+        setDonorName('');
+        onToast('Blood donor record updated.');
+        return;
+      }
+
+      const id = makeSafeId('bd');
       const donor: BloodDonor = {
         id,
         facilityId: facilities[0]?.id || user.facilityId,
@@ -289,7 +385,7 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
         phone: clampStr(donorPhone, 40),
         district: clampStr(donorDistrict, 80),
         lastDonationDate: now.slice(0, 10),
-        eligibilityStatus: 'Eligible',
+        eligibilityStatus: donorEligibility,
         unitsDonated: 1,
         isSynthetic: false,
         authorizedUids: [user.uid],
@@ -303,7 +399,17 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
       setDonorName('');
       onToast('Blood donor registered.');
     } catch (err) {
-      onToast(err instanceof Error ? err.message : 'Unable to register blood donor.');
+      onToast(err instanceof Error ? err.message : 'Unable to save blood donor.');
+    }
+  };
+
+  const handleDeleteDonor = async (d: BloodDonor) => {
+    try {
+      await safeDeleteDoc('bloodDonors', d.id);
+      await onLogAudit('DELETE_BLOOD_DONOR', 'BloodDonor', d.id, `Deleted donor ${d.donorName}`);
+      onToast(`Donor ${d.donorName} deleted.`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete donor.');
     }
   };
 
@@ -342,7 +448,9 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
       const crossName =
         status === 'Cross-Matched'
           ? (crossMatchNameOverride || patients[0]?.fullName || 'Matched Inpatient')
-          : unit.crossMatchPatientName || '';
+          : status === 'Available'
+            ? ''
+            : unit.crossMatchPatientName || '';
       await safeUpdateDoc('bloodInventory', unit.id, {
         status,
         crossMatchPatientName: clampStr(crossName, 160),
@@ -353,6 +461,16 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
       onToast(`Blood unit ${unit.unitCode} updated to ${status}.`);
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Unable to update blood unit status.');
+    }
+  };
+
+  const handleDeleteBloodUnit = async (unit: BloodUnit) => {
+    try {
+      await safeDeleteDoc('bloodInventory', unit.id);
+      await onLogAudit('DELETE_BLOOD_UNIT', 'BloodUnit', unit.id, `Deleted blood unit ${unit.unitCode}`);
+      onToast(`Blood unit ${unit.unitCode} deleted.`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete blood unit.');
     }
   };
 
@@ -397,19 +515,21 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
 
         {editingLab && (
           <form onSubmit={handleSaveLabResult} className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
-            <h3 className="text-sm font-semibold text-slate-900">Enter Result · {editingLab.testName} ({editingLab.sampleCode})</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-center">
+            <h3 className="text-sm font-semibold text-slate-900">Edit / Enter Result · {editingLab.testName} ({editingLab.sampleCode})</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-center">
+              <input type="text" required placeholder="Test Name" value={labEditTestName} onChange={(e) => setLabEditTestName(e.target.value)} className="px-3 py-2 text-xs border border-slate-300 rounded-lg" />
+              <input type="text" placeholder="Reference Range" value={labEditRefRange} onChange={(e) => setLabEditRefRange(e.target.value)} className="px-3 py-2 text-xs border border-slate-300 rounded-lg" />
               <input type="text" required placeholder="Measured result value" value={labResultVal} onChange={(e) => setLabResultVal(e.target.value)} className="px-3 py-2 text-xs border border-slate-300 rounded-lg" />
               <label className="flex items-center gap-2 text-xs text-slate-700">
                 <input type="checkbox" checked={labAbnormal} onChange={(e) => setLabAbnormal(e.target.checked)} />
                 Flag as Abnormal Result
               </label>
-              <div className="flex justify-end gap-2">
-                <button type="button" onClick={() => setEditingLab(null)} className="px-3 py-2 text-xs border border-slate-300 rounded-lg">Cancel</button>
-                <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg">
-                  {canApproveLab ? 'Save & Approve' : 'Save Result'}
-                </button>
-              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setEditingLab(null)} className="px-3 py-2 text-xs border border-slate-300 rounded-lg">Cancel</button>
+              <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg">
+                {canApproveLab ? 'Save & Approve' : 'Save Result'}
+              </button>
             </div>
           </form>
         )}
@@ -442,20 +562,27 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                     <div className="text-[11px] text-slate-500">Ref: {l.referenceRange || 'Standard'}</div>
                   </td>
                   <td className="py-2.5 px-4 font-medium text-slate-800">{l.status}</td>
-                  <td className="no-print py-2.5 px-4 text-right">
-                    {l.status !== 'Approved' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingLab(l);
-                          setLabResultVal(l.resultValue || '');
-                          setLabAbnormal(l.abnormalFlag);
-                        }}
-                        className="px-2.5 py-1 text-xs font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded-md hover:bg-teal-100"
-                      >
-                        Enter / Approve
-                      </button>
-                    )}
+                  <td className="no-print py-2.5 px-4 text-right whitespace-nowrap">
+                    <div className="inline-flex items-center gap-1.5">
+                      {(l.status !== 'Approved' || canAdminManageRecords) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingLab(l);
+                            setLabEditTestName(l.testName);
+                            setLabEditRefRange(l.referenceRange || 'Standard');
+                            setLabResultVal(l.resultValue || '');
+                            setLabAbnormal(l.abnormalFlag);
+                          }}
+                          className="px-2.5 py-1 text-xs font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded-md hover:bg-teal-100"
+                        >
+                          {l.status === 'Approved' ? 'Edit' : 'Enter / Approve'}
+                        </button>
+                      )}
+                      {canAdminManageRecords && (
+                        <ConfirmDeleteButton compact onConfirm={() => handleDeleteLabOrder(l)} title={`Delete lab order ${l.sampleCode}`} />
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -475,10 +602,34 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
             <p className="text-xs text-slate-600 mt-1">Medicine inventory, batch expiry alerts, reorder thresholds, and automated stock deduction on dispensing.</p>
           </div>
           <div className="no-print flex items-center gap-2">
-            <button type="button" onClick={() => setShowRxForm(!showRxForm)} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50">
+            <button
+              type="button"
+              onClick={() => {
+                setEditingRx(null);
+                setRxDosage('1 tablet');
+                setRxFreq('Twice daily for 7 days');
+                setRxQty('14');
+                setShowRxForm(!showRxForm);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50"
+            >
               <Plus className="w-3.5 h-3.5" /> New Prescription
             </button>
-            <button type="button" onClick={() => setShowMedForm(!showMedForm)} className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800">
+            <button
+              type="button"
+              onClick={() => {
+                setEditingMed(null);
+                setMedName('');
+                setMedCategory('Antimalarial');
+                setMedBatch('');
+                setMedExpiry('2027-06-30');
+                setMedStock('500');
+                setMedReorder('100');
+                setMedUnit('tablets');
+                setShowMedForm(!showMedForm);
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800"
+            >
               <Plus className="w-3.5 h-3.5" /> Register Medicine
             </button>
           </div>
@@ -486,6 +637,12 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
 
         {showMedForm && (
           <form onSubmit={handleAddMedicine} className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+            <div className="sm:col-span-3 lg:col-span-6 flex items-center justify-between border-b border-slate-100 pb-2">
+              <h3 className="text-sm font-semibold text-slate-900">
+                {editingMed ? `Edit Medicine · ${editingMed.name}` : 'Register Medicine Stock'}
+              </h3>
+              <button type="button" onClick={() => { setShowMedForm(false); setEditingMed(null); }} className="text-xs text-slate-500">Close</button>
+            </div>
             <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-700 mb-1">Medicine Name & Strength</label>
               <input type="text" required value={medName} onChange={(e) => setMedName(e.target.value)} placeholder="e.g., Amoxicillin 500mg" className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg" />
@@ -514,26 +671,32 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
               <label className="block text-xs font-medium text-slate-700 mb-1">Unit</label>
               <input type="text" required value={medUnit} onChange={(e) => setMedUnit(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg" />
             </div>
-            <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">Save Stock</button>
+            <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">
+              {editingMed ? 'Update Stock' : 'Save Stock'}
+            </button>
           </form>
         )}
 
         {showRxForm && (
           <form onSubmit={handleCreateRx} className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Patient</label>
-              <select required value={effectiveRxPatientId} onChange={(e) => setRxPatientId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
-                {patients.length === 0 && <option value="">No patients registered</option>}
-                {patients.map((p) => <option key={p.id} value={p.id}>{p.fullName}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Medicine</label>
-              <select required value={effectiveRxMedId} onChange={(e) => setRxMedId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
-                {medicines.length === 0 && <option value="">No medicines in stock</option>}
-                {medicines.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.stockQuantity} left)</option>)}
-              </select>
-            </div>
+            {!editingRx && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Patient</label>
+                  <select required value={effectiveRxPatientId} onChange={(e) => setRxPatientId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
+                    {patients.length === 0 && <option value="">No patients registered</option>}
+                    {patients.map((p) => <option key={p.id} value={p.id}>{p.fullName}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Medicine</label>
+                  <select required value={effectiveRxMedId} onChange={(e) => setRxMedId(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
+                    {medicines.length === 0 && <option value="">No medicines in stock</option>}
+                    {medicines.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.stockQuantity} left)</option>)}
+                  </select>
+                </div>
+              </>
+            )}
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Dosage</label>
               <input type="text" required value={rxDosage} onChange={(e) => setRxDosage(e.target.value)} placeholder="1 tablet" className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg" />
@@ -546,7 +709,14 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
               <label className="block text-xs font-medium text-slate-700 mb-1">Qty</label>
               <input type="number" min={1} required value={rxQty} onChange={(e) => setRxQty(e.target.value)} className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg font-mono" />
             </div>
-            <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800">Queue Prescription</button>
+            <div className="flex gap-2">
+              {editingRx && (
+                <button type="button" onClick={() => { setShowRxForm(false); setEditingRx(null); }} className="px-3 py-2 text-xs border border-slate-300 rounded-lg">Cancel</button>
+              )}
+              <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 whitespace-nowrap">
+                {editingRx ? 'Save Updates' : 'Queue Prescription'}
+              </button>
+            </div>
           </form>
         )}
 
@@ -565,8 +735,8 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                       <div className="font-semibold text-slate-900">{m.name}</div>
                       <div className="font-mono text-[11px] text-slate-500">Batch {m.batchNumber} · Exp {m.expiryDate}</div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <div className="text-right font-mono tabular-nums">
+                    <div className="flex items-center gap-2">
+                      <div className="text-right font-mono tabular-nums mr-1">
                         <div className={low ? 'text-red-700 font-bold' : 'text-slate-900 font-semibold'}>
                           {m.stockQuantity} {m.unit}
                         </div>
@@ -586,6 +756,28 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                           <PackagePlus className="w-3 h-3" /> +50
                         </button>
                       )}
+                      {canAdminManageRecords && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingMed(m);
+                              setMedName(m.name);
+                              setMedCategory(m.category || 'General');
+                              setMedBatch(m.batchNumber);
+                              setMedExpiry(m.expiryDate);
+                              setMedStock(String(m.stockQuantity));
+                              setMedReorder(String(m.reorderLevel));
+                              setMedUnit(m.unit);
+                              setShowMedForm(true);
+                            }}
+                            className="no-print inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded hover:bg-teal-100"
+                          >
+                            <Edit3 className="w-3 h-3" /> Edit
+                          </button>
+                          <ConfirmDeleteButton compact onConfirm={() => handleDeleteMedicine(m)} title={`Delete medicine ${m.name}`} />
+                        </>
+                      )}
                     </div>
                   </div>
                 );
@@ -603,23 +795,38 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                 <div key={rx.id} className="p-4 text-xs flex items-center justify-between gap-4">
                   <div>
                     <div className="font-semibold text-slate-900">{rx.patientName} · {rx.medicineName}</div>
-                    <div className="text-slate-600">{rx.dosage} {rx.frequency} · Qty: <span className="font-mono">{rx.quantity}</span></div>
+                    <div className="text-slate-600">{rx.dosage} {rx.frequency} · Qty: <span className="font-mono">{rx.quantity}</span> · <span className="font-semibold">{rx.status}</span></div>
                   </div>
-                  {rx.status === 'Pending' && canDispensePharmacy ? (
-                    <>
-                      <span className="print-only font-medium text-slate-700">{rx.status}</span>
-                      <div className="no-print flex items-center gap-1.5 shrink-0">
-                        <button type="button" onClick={() => handleCancelRx(rx)} className="px-2 py-1.5 text-xs font-medium text-slate-600 border border-slate-300 rounded-md hover:bg-slate-50">
+                  <div className="no-print flex items-center gap-1.5 shrink-0">
+                    {rx.status === 'Pending' && canDispensePharmacy && (
+                      <>
+                        <button type="button" onClick={() => handleCancelRx(rx)} className="px-2 py-1 text-[11px] font-medium text-slate-600 border border-slate-300 rounded hover:bg-slate-50">
                           Cancel
                         </button>
-                        <button type="button" onClick={() => handleDispenseRx(rx)} className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-emerald-700 rounded-md hover:bg-emerald-800">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Dispense
+                        <button type="button" onClick={() => handleDispenseRx(rx)} className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-white bg-emerald-700 rounded hover:bg-emerald-800">
+                          <CheckCircle2 className="w-3 h-3" /> Dispense
                         </button>
-                      </div>
-                    </>
-                  ) : (
-                    <span className="font-medium text-slate-700">{rx.status}</span>
-                  )}
+                      </>
+                    )}
+                    {canAdminManageRecords && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingRx(rx);
+                            setRxDosage(rx.dosage || '1 tablet');
+                            setRxFreq(rx.frequency || '');
+                            setRxQty(String(rx.quantity));
+                            setShowRxForm(true);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded hover:bg-teal-100"
+                        >
+                          <Edit3 className="w-3 h-3" /> Edit
+                        </button>
+                        <ConfirmDeleteButton compact onConfirm={() => handleDeleteRx(rx)} title={`Delete prescription for ${rx.patientName}`} />
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -638,7 +845,19 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
           <p className="text-xs text-slate-600 mt-1">Voluntary donor registry, blood group stock levels, expiry alerts, cross-matching, and safe issue tracking.</p>
         </div>
         <div className="no-print flex items-center gap-2">
-          <button type="button" onClick={() => setShowDonorForm(!showDonorForm)} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50">
+          <button
+            type="button"
+            onClick={() => {
+              setEditingDonor(null);
+              setDonorName('');
+              setDonorGroup('O+');
+              setDonorDistrict('Western Area Urban');
+              setDonorPhone('');
+              setDonorEligibility('Eligible');
+              setShowDonorForm(!showDonorForm);
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50"
+          >
             <Plus className="w-3.5 h-3.5" /> Register Donor
           </button>
           <button type="button" onClick={() => setShowUnitForm(!showUnitForm)} className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800">
@@ -648,7 +867,7 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
       </div>
 
       {showDonorForm && (
-        <form onSubmit={handleAddDonor} className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+        <form onSubmit={handleAddDonor} className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
           <input type="text" required placeholder="Donor Full Name" value={donorName} onChange={(e) => setDonorName(e.target.value)} className="px-3 py-2 text-xs border border-slate-300 rounded-lg" />
           <select value={donorGroup} onChange={(e) => setDonorGroup(e.target.value as BloodDonor['bloodGroup'])} className="px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
             {['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'].map((g) => <option key={g} value={g}>{g}</option>)}
@@ -657,7 +876,14 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
             {SIERRA_LEONE_DISTRICTS.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
           <input type="text" placeholder="Phone" value={donorPhone} onChange={(e) => setDonorPhone(e.target.value)} className="px-3 py-2 text-xs border border-slate-300 rounded-lg font-mono" />
-          <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">Save Donor</button>
+          <select value={donorEligibility} onChange={(e) => setDonorEligibility(e.target.value as BloodDonor['eligibilityStatus'])} className="px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white">
+            <option value="Eligible">Eligible</option>
+            <option value="Temporary Deferral">Temporary Deferral</option>
+            <option value="Deferred">Deferred</option>
+          </select>
+          <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg">
+            {editingDonor ? 'Update Donor' : 'Save Donor'}
+          </button>
         </form>
       )}
 
@@ -685,8 +911,8 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                     <div className="font-mono font-semibold text-slate-900">{u.unitCode} · Group {u.bloodGroup}</div>
                     <div className="text-slate-600">{u.componentType} · Exp {u.expiryDate} {u.crossMatchPatientName ? `· Cross-matched: ${u.crossMatchPatientName}` : ''}</div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="font-medium text-slate-800">{u.status}</span>
+                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                    <span className="font-medium text-slate-800 mr-1">{u.status}</span>
                     {u.status === 'Available' && (
                       <button
                         type="button"
@@ -703,6 +929,21 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
                       <button type="button" onClick={() => handleUpdateBloodUnitStatus(u, 'Issued')} className="no-print px-2.5 py-1 bg-teal-700 text-white rounded hover:bg-teal-800">
                         Issue Unit
                       </button>
+                    )}
+                    {canAdminManageRecords && (
+                      <>
+                        <select
+                          aria-label={`Set blood unit ${u.unitCode} status`}
+                          value={u.status}
+                          onChange={(e) => handleUpdateBloodUnitStatus(u, e.target.value as BloodUnit['status'])}
+                          className="no-print px-2 py-1 text-[11px] border border-slate-300 rounded bg-white"
+                        >
+                          {(['Available', 'Cross-Matched', 'Issued', 'Quarantined', 'Expired'] as const).map((st) => (
+                            <option key={st} value={st}>{st}</option>
+                          ))}
+                        </select>
+                        <ConfirmDeleteButton compact onConfirm={() => handleDeleteBloodUnit(u)} title={`Delete blood unit ${u.unitCode}`} />
+                      </>
                     )}
                   </div>
                 </div>
@@ -748,12 +989,34 @@ export const DiagnosticsOperationsModule: React.FC<Props> = ({
           </div>
           <div className="divide-y divide-slate-100">
             {bloodDonors.map((d) => (
-              <div key={d.id} className="p-4 text-xs flex items-center justify-between">
+              <div key={d.id} className="p-4 text-xs flex items-center justify-between gap-3">
                 <div>
                   <div className="font-semibold text-slate-900">{d.donorName} · Group {d.bloodGroup}</div>
                   <div className="text-slate-600">{d.district} · Last donation: {d.lastDonationDate || 'N/A'}</div>
                 </div>
-                <span className="font-medium text-emerald-700">{d.eligibilityStatus}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="font-medium text-emerald-700">{d.eligibilityStatus}</span>
+                  {canAdminManageRecords && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingDonor(d);
+                          setDonorName(d.donorName);
+                          setDonorGroup(d.bloodGroup);
+                          setDonorDistrict(d.district);
+                          setDonorPhone(d.phone || '');
+                          setDonorEligibility(d.eligibilityStatus);
+                          setShowDonorForm(true);
+                        }}
+                        className="no-print inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded hover:bg-teal-100"
+                      >
+                        <Edit3 className="w-3 h-3" /> Edit
+                      </button>
+                      <ConfirmDeleteButton compact onConfirm={() => handleDeleteDonor(d)} title={`Delete donor ${d.donorName}`} />
+                    </>
+                  )}
+                </div>
               </div>
             ))}
           </div>

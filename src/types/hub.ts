@@ -102,10 +102,10 @@ export const ROLE_PERMISSION_MATRIX: Record<UserRole, RolePermissions> = {
     canManageUsers: true,
     canEditPatients: true,
     canEditEncounters: true,
-    canApproveLab: false,
-    canDispensePharmacy: false,
+    canApproveLab: true,
+    canDispensePharmacy: true,
     canManageClaims: true,
-    canVerifyAlerts: false,
+    canVerifyAlerts: true,
     canExportData: true,
   },
   'Medical Doctor': {

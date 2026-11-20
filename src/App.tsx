@@ -444,10 +444,16 @@ export default function App() {
       userProfile.role === 'Super Administrator';
     const isFacilityAdmin = userProfile.role === 'Hospital Administrator';
 
-    const piiQuery = (colName: string): Query<DocumentData> =>
-      isSuper
-        ? collection(db, colName)
-        : query(collection(db, colName), where('authorizedUids', 'array-contains', firebaseUser.uid));
+    const piiQuery = (colName: string): Query<DocumentData> => {
+      if (isSuper) return collection(db, colName);
+      if (isFacilityAdmin && userProfile.facilityId) {
+        if (colName === 'referrals') {
+          return query(collection(db, colName), where('fromFacilityId', '==', userProfile.facilityId));
+        }
+        return query(collection(db, colName), where('facilityId', '==', userProfile.facilityId));
+      }
+      return query(collection(db, colName), where('authorizedUids', 'array-contains', firebaseUser.uid));
+    };
 
     const subscribe = <T,>(
       colName: string,
@@ -469,6 +475,12 @@ export default function App() {
       : isFacilityAdmin
         ? query(collection(db, 'users'), where('facilityId', '==', userProfile.facilityId))
         : query(collection(db, 'users'), where('uid', '==', firebaseUser.uid));
+
+    const auditQuery = isSuper
+      ? collection(db, 'auditLogs')
+      : isFacilityAdmin && userProfile.facilityId
+        ? query(collection(db, 'auditLogs'), where('facilityId', '==', userProfile.facilityId))
+        : query(collection(db, 'auditLogs'), where('actorUid', '==', firebaseUser.uid));
 
     const unsubs = [
       subscribe<Facility>(
@@ -492,11 +504,7 @@ export default function App() {
       subscribe<TelemedicineAppointment>('telemedicineAppointments', piiQuery('telemedicineAppointments'), setTelemedicine),
       subscribe<SurveillanceRecord>('surveillanceRecords', collection(db, 'surveillanceRecords'), setSurveillance),
       subscribe<PublicHealthAlert>('publicHealthAlerts', collection(db, 'publicHealthAlerts'), setAlerts),
-      subscribe<AuditLog>(
-        'auditLogs',
-        isSuper ? collection(db, 'auditLogs') : query(collection(db, 'auditLogs'), where('actorUid', '==', firebaseUser.uid)),
-        setAuditLogs
-      ),
+      subscribe<AuditLog>('auditLogs', auditQuery, setAuditLogs),
       onSnapshot(
         doc(db, 'platformSettings', 'global'),
         (snap) => {
@@ -513,6 +521,8 @@ export default function App() {
 
   const effectiveRole: UserRole = simulatedRole || userProfile?.role || 'Medical Doctor';
   const perms = ROLE_PERMISSION_MATRIX[effectiveRole];
+  const canAdminManageRecords =
+    effectiveRole === 'Super Administrator' || effectiveRole === 'Hospital Administrator';
 
   const visibleNav = useMemo(
     () => NAV_ITEMS.filter((item) => perms.modules.includes(item.key)),
@@ -1706,6 +1716,7 @@ export default function App() {
               alerts={alerts}
               settings={settings}
               canVerifyAlerts={perms.canVerifyAlerts}
+              canAdminManageRecords={canAdminManageRecords}
               onLogAudit={logAudit}
               onToast={showToast}
               onOpenPrintPreview={() => setShowPrintPreview(true)}
@@ -1721,6 +1732,7 @@ export default function App() {
               screenings={screenings}
               followUpTasks={followUpTasks}
               referrals={referrals}
+              canAdminManageRecords={canAdminManageRecords}
               onLogAudit={logAudit}
               onToast={showToast}
             />
@@ -1742,6 +1754,7 @@ export default function App() {
               onClearFocusedPatient={() => setFocusedPatientId(null)}
               canEditPatients={perms.canEditPatients}
               canEditEncounters={perms.canEditEncounters}
+              canAdminManageRecords={canAdminManageRecords}
               onLogAudit={logAudit}
               onToast={showToast}
             />
@@ -1760,6 +1773,7 @@ export default function App() {
               bloodUnits={bloodUnits}
               canApproveLab={perms.canApproveLab}
               canDispensePharmacy={perms.canDispensePharmacy}
+              canAdminManageRecords={canAdminManageRecords}
               onLogAudit={logAudit}
               onToast={showToast}
               onOpenPrintPreview={() => setShowPrintPreview(true)}
@@ -1781,6 +1795,7 @@ export default function App() {
               telemedicine={telemedicine}
               referrals={referrals}
               canManageClaims={perms.canManageClaims}
+              canAdminManageRecords={canAdminManageRecords}
               onLogAudit={logAudit}
               onToast={showToast}
               onOpenPrintPreview={() => setShowPrintPreview(true)}
@@ -1796,6 +1811,7 @@ export default function App() {
                   auditLogs={auditLogs}
                   canManageFacilities={perms.canManageFacilities}
                   canManageUsers={perms.canManageUsers}
+                  canAdminManageRecords={canAdminManageRecords}
                   onLogAudit={logAudit}
                   onToast={showToast}
                 />

@@ -14,8 +14,9 @@ import {
   type ScreeningRecord,
   type UserProfile,
 } from '../../types/hub';
-import { safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
+import { safeDeleteDoc, safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
 import { PatientProfileDrawer } from '../PatientProfileDrawer';
+import { ConfirmDeleteButton } from '../ConfirmDeleteButton';
 
 interface Props {
   mode: 'patients' | 'clinical';
@@ -32,6 +33,7 @@ interface Props {
   onClearFocusedPatient?: () => void;
   canEditPatients: boolean;
   canEditEncounters: boolean;
+  canAdminManageRecords?: boolean;
   onLogAudit: (action: string, resourceType: string, resourceId: string, details: string) => Promise<void>;
   onToast: (msg: string) => void;
 }
@@ -51,6 +53,7 @@ export const PatientsClinicalModule: React.FC<Props> = ({
   onClearFocusedPatient,
   canEditPatients,
   canEditEncounters,
+  canAdminManageRecords = false,
   onLogAudit,
   onToast,
 }) => {
@@ -283,6 +286,27 @@ export const PatientsClinicalModule: React.FC<Props> = ({
     }
   };
 
+  const handleDeletePatient = async (p: Patient) => {
+    try {
+      await safeDeleteDoc('patients', p.id);
+      await onLogAudit('DELETE_PATIENT', 'Patient', p.id, `Deleted patient ${p.fullName} (${p.patientUid})`);
+      if (selectedPatient?.id === p.id) setSelectedPatient(null);
+      onToast(`Patient record ${p.patientUid} deleted.`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete patient.');
+    }
+  };
+
+  const handleDeleteEncounter = async (enc: Encounter) => {
+    try {
+      await safeDeleteDoc('encounters', enc.id);
+      await onLogAudit('DELETE_ENCOUNTER', 'Encounter', enc.id, `Deleted encounter for ${enc.patientName} (${enc.encounterType})`);
+      onToast(`Encounter for ${enc.patientName} deleted.`);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : 'Unable to delete encounter.');
+    }
+  };
+
   const filteredPatients = patients.filter((p) => {
     if (districtFilter !== 'All' && p.district !== districtFilter) return false;
     if (search.trim()) {
@@ -500,6 +524,13 @@ export const PatientsClinicalModule: React.FC<Props> = ({
                               Edit
                             </button>
                           )}
+                          {canAdminManageRecords && (
+                            <ConfirmDeleteButton
+                              compact
+                              onConfirm={() => handleDeletePatient(p)}
+                              title={`Delete patient ${p.fullName}`}
+                            />
+                          )}
                         </td>
                       </tr>
                     ))
@@ -670,28 +701,37 @@ export const PatientsClinicalModule: React.FC<Props> = ({
                       {enc.treatmentPlan && <div className="text-slate-600"><strong>Plan:</strong> {enc.treatmentPlan}</div>}
                       {enc.dischargeSummary && <div className="text-emerald-800"><strong>Discharge Summary:</strong> {enc.dischargeSummary}</div>}
                     </div>
-                    {canEditEncounters && enc.status !== 'Discharged' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingEnc(enc);
-                          setEncType(enc.encounterType);
-                          setEncDept(enc.department);
-                          setEncComplaint(enc.chiefComplaint);
-                          setEncVitals(enc.vitalSigns || '');
-                          setEncNursing(enc.nursingNotes || '');
-                          setEncDiagnosis(enc.diagnosis || '');
-                          setEncPlan(enc.treatmentPlan || '');
-                          setEncDischarge(enc.dischargeSummary || '');
-                          setEncStatus(enc.status);
-                          setEncWardBed(enc.wardBed || '');
-                          setShowEncForm(true);
-                        }}
-                        className="no-print px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-100 whitespace-nowrap shrink-0"
-                      >
-                        Update / Discharge
-                      </button>
-                    )}
+                    <div className="no-print flex items-center gap-2 shrink-0">
+                      {canEditEncounters && (enc.status !== 'Discharged' || canAdminManageRecords) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingEnc(enc);
+                            setEncType(enc.encounterType);
+                            setEncDept(enc.department);
+                            setEncComplaint(enc.chiefComplaint);
+                            setEncVitals(enc.vitalSigns || '');
+                            setEncNursing(enc.nursingNotes || '');
+                            setEncDiagnosis(enc.diagnosis || '');
+                            setEncPlan(enc.treatmentPlan || '');
+                            setEncDischarge(enc.dischargeSummary || '');
+                            setEncStatus(enc.status);
+                            setEncWardBed(enc.wardBed || '');
+                            setShowEncForm(true);
+                          }}
+                          className="px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-100 whitespace-nowrap"
+                        >
+                          {enc.status === 'Discharged' ? 'Edit Record' : 'Update / Discharge'}
+                        </button>
+                      )}
+                      {canAdminManageRecords && (
+                        <ConfirmDeleteButton
+                          compact
+                          onConfirm={() => handleDeleteEncounter(enc)}
+                          title={`Delete encounter for ${enc.patientName}`}
+                        />
+                      )}
+                    </div>
                   </div>
                 ))
               )}
