@@ -1,5 +1,11 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import {
+  EmailAuthProvider,
+  getAuth,
+  GoogleAuthProvider,
+  reauthenticateWithCredential,
+  reauthenticateWithPopup,
+} from 'firebase/auth';
 import {
   getFirestore,
   doc,
@@ -7,6 +13,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -113,3 +120,58 @@ export async function safeDeleteDoc(collectionName: string, id: string): Promise
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+export async function reauthenticateCurrentUserWithPassword(password: string): Promise<void> {
+  const user = auth.currentUser;
+  if (!user || !user.email) {
+    throw new Error('No authenticated email session is active.');
+  }
+  const credential = EmailAuthProvider.credential(user.email, password);
+  await reauthenticateWithCredential(user, credential);
+}
+
+export async function reauthenticateCurrentUserWithGoogle(): Promise<void> {
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error('No authenticated user session is active.');
+  }
+  await reauthenticateWithPopup(user, googleAuthProvider);
+}
+
+const FIRESTORE_BATCH_CHUNK = 400;
+
+export async function safeBatchUpdate(
+  collectionName: string,
+  updates: { id: string; data: Record<string, unknown> }[]
+): Promise<void> {
+  if (updates.length === 0) return;
+  try {
+    for (let i = 0; i < updates.length; i += FIRESTORE_BATCH_CHUNK) {
+      const slice = updates.slice(i, i + FIRESTORE_BATCH_CHUNK);
+      const batch = writeBatch(db);
+      for (const item of slice) {
+        batch.update(doc(db, collectionName, item.id), item.data);
+      }
+      await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `${collectionName}/bulk_update`);
+  }
+}
+
+export async function safeBatchDelete(collectionName: string, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    for (let i = 0; i < ids.length; i += FIRESTORE_BATCH_CHUNK) {
+      const slice = ids.slice(i, i + FIRESTORE_BATCH_CHUNK);
+      const batch = writeBatch(db);
+      for (const id of slice) {
+        batch.delete(doc(db, collectionName, id));
+      }
+      await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `${collectionName}/bulk_delete`);
+  }
+}
+

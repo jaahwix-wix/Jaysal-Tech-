@@ -1805,10 +1805,12 @@ export default function App() {
               {activeModule === 'admin-docs' && (
                 <AdminGovernanceModule
                   user={userProfile}
+                  effectiveRole={effectiveRole}
                   facilities={facilities}
                   staffUsers={staffUsers}
                   settings={settings}
                   auditLogs={auditLogs}
+                  hubData={hubSnapshot}
                   canManageFacilities={perms.canManageFacilities}
                   canManageUsers={perms.canManageUsers}
                   canAdminManageRecords={canAdminManageRecords}

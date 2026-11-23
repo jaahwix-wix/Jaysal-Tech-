@@ -1,5 +1,21 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, ShieldCheck, Building2, Sliders, FileText, CheckCircle2, Download, Copy, UserCheck, XCircle, Edit3, KeyRound } from 'lucide-react';
+import {
+  Plus,
+  ShieldCheck,
+  ShieldAlert,
+  Building2,
+  Sliders,
+  FileText,
+  CheckCircle2,
+  Download,
+  Copy,
+  UserCheck,
+  XCircle,
+  Edit3,
+  KeyRound,
+  Database,
+  Trash2,
+} from 'lucide-react';
 import {
   SIERRA_LEONE_DISTRICTS,
   USER_ROLES,
@@ -11,18 +27,24 @@ import {
   type UserProfile,
   type UserRole,
 } from '../../types/hub';
-import { safeDeleteDoc, safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
+import { safeBatchDelete, safeBatchUpdate, safeDeleteDoc, safeSetDoc, safeUpdateDoc } from '../../lib/firebase';
 import { downloadSystemDocumentationPdf } from '../../lib/pdfDocumentation';
+import type { HubDatasetSnapshot } from '../../lib/exportUtils';
 import { ConfirmDeleteButton } from '../ConfirmDeleteButton';
+import { ReauthActionModal, type HighImpactActionRequest } from '../ReauthActionModal';
+import { GlobalRecordsPanel } from './GlobalRecordsPanel';
+import { RegionalFacilityPerformanceCard } from './RegionalFacilityPerformanceCard';
 import initialSqlSchema from '../../../supabase/migrations/001_initial_schema.sql?raw';
 import platformDocsMd from '../../../docs/PLATFORM_DOCUMENTATION.md?raw';
 
 interface Props {
   user: UserProfile;
+  effectiveRole?: UserRole;
   facilities: Facility[];
   staffUsers: UserProfile[];
   settings: PlatformSettings | null;
   auditLogs: AuditLog[];
+  hubData?: HubDatasetSnapshot;
   canManageFacilities: boolean;
   canManageUsers: boolean;
   canAdminManageRecords?: boolean;
@@ -32,24 +54,48 @@ interface Props {
 
 export const AdminGovernanceModule: React.FC<Props> = ({
   user,
+  effectiveRole,
   facilities,
   staffUsers,
   settings,
   auditLogs,
+  hubData,
   canManageFacilities,
   canManageUsers,
   canAdminManageRecords = false,
   onLogAudit,
   onToast,
 }) => {
-  const isSuperAdmin = user.role === 'Super Administrator';
+  const isSuperAdmin = (effectiveRole || user.role) === 'Super Administrator';
   const pendingStaff = staffUsers.filter((s) => s.status === 'Pending');
-  const [tab, setTab] = useState<'facilities' | 'staff' | 'settings' | 'audit' | 'docs'>(
+  const [tab, setTab] = useState<'facilities' | 'staff' | 'global-records' | 'settings' | 'audit' | 'docs'>(
     !canManageFacilities && canManageUsers ? 'staff' : 'facilities'
   );
+  const [globalRecordsMode, setGlobalRecordsMode] = useState(false);
+  const [reauthRequest, setReauthRequest] = useState<HighImpactActionRequest | null>(null);
+
+  // Bulk selection state for Hospitals & Staff tables when Global Records Management is ON
+  const [selectedFacIds, setSelectedFacIds] = useState<string[]>([]);
+  const [bulkFacStatus, setBulkFacStatus] = useState<'' | Facility['status']>('');
+  const [bulkFacDistrict, setBulkFacDistrict] = useState('');
+  const [selectedStaffUids, setSelectedStaffUids] = useState<string[]>([]);
+  const [bulkStaffStatus, setBulkStaffStatus] = useState<'' | UserProfile['status']>('');
+  const [bulkStaffRole, setBulkStaffRole] = useState<'' | UserRole>('');
+
   const assignableRoles = isSuperAdmin
     ? USER_ROLES
     : USER_ROLES.filter((r) => r !== 'Super Administrator');
+
+  useEffect(() => {
+    if (!isSuperAdmin && globalRecordsMode) {
+      setGlobalRecordsMode(false);
+      setSelectedFacIds([]);
+      setSelectedStaffUids([]);
+      if (tab === 'global-records') {
+        setTab('facilities');
+      }
+    }
+  }, [isSuperAdmin, globalRecordsMode, tab]);
 
   // Facility Form
   const [showFacForm, setShowFacForm] = useState(false);
@@ -171,10 +217,25 @@ export const AdminGovernanceModule: React.FC<Props> = ({
   };
 
   const handleDeleteFacility = async (fac: Facility) => {
-    try {
+    const executeDelete = async () => {
       await safeDeleteDoc('facilities', fac.id);
       await onLogAudit('DELETE_FACILITY', 'Facility', fac.id, `Deleted facility ${fac.name} (${fac.code})`);
       onToast(`Facility ${fac.name} deleted.`);
+    };
+    if (isSuperAdmin && globalRecordsMode) {
+      setReauthRequest({
+        title: `Confirm Global Delete (${fac.name})`,
+        actionType: 'BULK_DELETE',
+        collectionLabel: 'Hospitals & Facilities',
+        recordCount: 1,
+        facilitySummary: fac.name,
+        detailsSummary: `Permanently delete facility ${fac.name} (${fac.code}) while Global Records Management is active.`,
+        onExecute: executeDelete,
+      });
+      return;
+    }
+    try {
+      await executeDelete();
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Unable to delete facility.');
     }
@@ -248,7 +309,7 @@ export const AdminGovernanceModule: React.FC<Props> = ({
   };
 
   const handleDeleteStaffUser = async (target: UserProfile) => {
-    try {
+    const executeDelete = async () => {
       await safeDeleteDoc('users', target.uid);
       await onLogAudit(
         'DELETE_STAFF_USER',
@@ -257,6 +318,21 @@ export const AdminGovernanceModule: React.FC<Props> = ({
         `Deleted user profile ${target.email} (${target.role})`
       );
       onToast(`Removed user profile for ${target.displayName}.`);
+    };
+    if (isSuperAdmin && globalRecordsMode) {
+      setReauthRequest({
+        title: `Confirm Global Staff Delete (${target.displayName})`,
+        actionType: 'BULK_DELETE',
+        collectionLabel: 'Staff & Admin Accounts',
+        recordCount: 1,
+        facilitySummary: target.facilityName || target.facilityId,
+        detailsSummary: `Permanently delete user profile ${target.email} (${target.role}) while Global Records Management is active.`,
+        onExecute: executeDelete,
+      });
+      return;
+    }
+    try {
+      await executeDelete();
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Unable to delete user profile.');
     }
@@ -286,6 +362,186 @@ export const AdminGovernanceModule: React.FC<Props> = ({
     }
   };
 
+  const handleToggleGlobalRecordsMode = () => {
+    if (!isSuperAdmin) return;
+    if (globalRecordsMode) {
+      setGlobalRecordsMode(false);
+      setSelectedFacIds([]);
+      setSelectedStaffUids([]);
+      if (tab === 'global-records') {
+        setTab('facilities');
+      }
+      onToast('Global Records Management deactivated.');
+      return;
+    }
+    setGlobalRecordsMode(true);
+    setTab('global-records');
+    onToast('Global Records Management enabled. All bulk Delete/Modify actions require fresh re-authentication.');
+  };
+
+  const handleBulkModifyFacilities = () => {
+    if (!isSuperAdmin || selectedFacIds.length === 0) return;
+    if (!bulkFacStatus && !bulkFacDistrict) {
+      onToast('Select a target Status or District before applying bulk modification.');
+      return;
+    }
+    const targetNames = facilities
+      .filter((f) => selectedFacIds.includes(f.id))
+      .map((f) => f.name)
+      .slice(0, 3)
+      .join(', ');
+    const now = new Date().toISOString();
+    const updates = selectedFacIds.map((id) => ({
+      id,
+      data: {
+        ...(bulkFacStatus ? { status: bulkFacStatus } : {}),
+        ...(bulkFacDistrict ? { district: bulkFacDistrict } : {}),
+        updatedAt: now,
+      },
+    }));
+
+    setReauthRequest({
+      title: 'Confirm Global Bulk Modify (Hospitals)',
+      actionType: 'BULK_MODIFY',
+      collectionLabel: 'Hospitals & Facilities',
+      recordCount: updates.length,
+      facilitySummary: targetNames + (selectedFacIds.length > 3 ? ` + ${selectedFacIds.length - 3} more` : ''),
+      detailsSummary: `Apply [${bulkFacStatus ? `Status -> ${bulkFacStatus}` : ''}${
+        bulkFacStatus && bulkFacDistrict ? ', ' : ''
+      }${bulkFacDistrict ? `District -> ${bulkFacDistrict}` : ''}] across ${updates.length} hospital record(s).`,
+      onExecute: async () => {
+        await safeBatchUpdate('facilities', updates);
+        await onLogAudit(
+          'GLOBAL_BULK_MODIFY_FACILITIES',
+          'Facility',
+          `batch_${updates.length}`,
+          `Bulk modified ${updates.length} facilities (${targetNames})`
+        );
+        setSelectedFacIds([]);
+        setBulkFacStatus('');
+        setBulkFacDistrict('');
+        onToast(`Bulk modified ${updates.length} hospital record(s).`);
+      },
+    });
+  };
+
+  const handleBulkDeleteFacilities = () => {
+    if (!isSuperAdmin || selectedFacIds.length === 0) return;
+    const targetNames = facilities
+      .filter((f) => selectedFacIds.includes(f.id))
+      .map((f) => f.name)
+      .slice(0, 3)
+      .join(', ');
+
+    setReauthRequest({
+      title: 'Confirm Global Bulk Delete (Hospitals)',
+      actionType: 'BULK_DELETE',
+      collectionLabel: 'Hospitals & Facilities',
+      recordCount: selectedFacIds.length,
+      facilitySummary: targetNames + (selectedFacIds.length > 3 ? ` + ${selectedFacIds.length - 3} more` : ''),
+      detailsSummary: `Permanently delete ${selectedFacIds.length} hospital record(s) from Firestore. This action cannot be undone.`,
+      onExecute: async () => {
+        const idsToDelete = [...selectedFacIds];
+        await safeBatchDelete('facilities', idsToDelete);
+        await onLogAudit(
+          'GLOBAL_BULK_DELETE_FACILITIES',
+          'Facility',
+          `batch_${idsToDelete.length}`,
+          `Bulk deleted ${idsToDelete.length} facilities (${targetNames})`
+        );
+        setSelectedFacIds([]);
+        onToast(`Permanently deleted ${idsToDelete.length} hospital record(s).`);
+      },
+    });
+  };
+
+  const handleBulkModifyStaff = () => {
+    if (!isSuperAdmin || selectedStaffUids.length === 0) return;
+    if (!bulkStaffStatus && !bulkStaffRole) {
+      onToast('Select a target Role or Approval Status before applying bulk modification.');
+      return;
+    }
+    const safeTargets = staffUsers.filter(
+      (s) =>
+        selectedStaffUids.includes(s.uid) &&
+        !(s.uid === user.uid || s.email === 'jaahwix@gmail.com')
+    );
+    if (safeTargets.length === 0) {
+      onToast('Protected Super Admin / active session accounts cannot be bulk modified here.');
+      return;
+    }
+    const now = new Date().toISOString();
+    const updates = safeTargets.map((s) => ({
+      id: s.uid,
+      data: {
+        ...(bulkStaffStatus ? { status: bulkStaffStatus } : {}),
+        ...(bulkStaffRole ? { role: bulkStaffRole } : {}),
+        updatedAt: now,
+      },
+    }));
+
+    setReauthRequest({
+      title: 'Confirm Global Bulk Modify (Staff & Admins)',
+      actionType: 'BULK_MODIFY',
+      collectionLabel: 'Staff & Admin Accounts',
+      recordCount: updates.length,
+      facilitySummary: `${Array.from(new Set(safeTargets.map((s) => s.facilityName || s.facilityId))).length} hospital(s)`,
+      detailsSummary: `Update [${bulkStaffRole ? `Role -> ${bulkStaffRole}` : ''}${
+        bulkStaffRole && bulkStaffStatus ? ', ' : ''
+      }${bulkStaffStatus ? `Status -> ${bulkStaffStatus}` : ''}] for ${updates.length} staff user(s).`,
+      onExecute: async () => {
+        await safeBatchUpdate('users', updates);
+        await onLogAudit(
+          'GLOBAL_BULK_MODIFY_USERS',
+          'UserProfile',
+          `batch_${updates.length}`,
+          `Bulk modified ${updates.length} staff accounts`
+        );
+        setSelectedStaffUids([]);
+        setBulkStaffRole('');
+        setBulkStaffStatus('');
+        onToast(`Bulk updated ${updates.length} staff account(s).`);
+      },
+    });
+  };
+
+  const handleBulkDeleteStaff = () => {
+    if (!isSuperAdmin || selectedStaffUids.length === 0) return;
+    const deletable = staffUsers.filter(
+      (s) =>
+        selectedStaffUids.includes(s.uid) &&
+        s.uid !== user.uid &&
+        s.email !== 'jaahwix@gmail.com'
+    );
+    if (deletable.length === 0) {
+      onToast('Protected Super Admin / active session accounts cannot be deleted.');
+      return;
+    }
+
+    setReauthRequest({
+      title: 'Confirm Global Bulk Delete (Staff & Admins)',
+      actionType: 'BULK_DELETE',
+      collectionLabel: 'Staff & Admin Accounts',
+      recordCount: deletable.length,
+      facilitySummary: `${Array.from(new Set(deletable.map((s) => s.facilityName || s.facilityId))).length} hospital(s)`,
+      detailsSummary: `Permanently delete ${deletable.length} staff profile(s) from Firestore across selected facilities.`,
+      onExecute: async () => {
+        await safeBatchDelete(
+          'users',
+          deletable.map((s) => s.uid)
+        );
+        await onLogAudit(
+          'GLOBAL_BULK_DELETE_USERS',
+          'UserProfile',
+          `batch_${deletable.length}`,
+          `Bulk deleted ${deletable.length} staff user profiles`
+        );
+        setSelectedStaffUids([]);
+        onToast(`Permanently deleted ${deletable.length} staff account(s).`);
+      },
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
@@ -296,6 +552,29 @@ export const AdminGovernanceModule: React.FC<Props> = ({
           </p>
         </div>
         <div className="no-print flex flex-wrap items-center gap-2">
+          {isSuperAdmin && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={globalRecordsMode}
+              onClick={handleToggleGlobalRecordsMode}
+              className={`inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap ${
+                globalRecordsMode
+                  ? 'bg-amber-600 text-white border-amber-700 hover:bg-amber-700 shadow-xs'
+                  : 'bg-white text-slate-800 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>Global Records Management</span>
+              <span
+                className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded ${
+                  globalRecordsMode ? 'bg-amber-900/40 text-white' : 'bg-slate-200 text-slate-700'
+                }`}
+              >
+                {globalRecordsMode ? 'ON' : 'OFF'}
+              </span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -311,6 +590,9 @@ export const AdminGovernanceModule: React.FC<Props> = ({
             {([
               ['facilities', 'Hospitals', Building2],
               ['staff', pendingStaff.length > 0 ? `Users & RBAC (${pendingStaff.length} Pending)` : 'Users & RBAC', ShieldCheck],
+              ...(isSuperAdmin && globalRecordsMode
+                ? ([['global-records', 'Global Records', Database]] as const)
+                : []),
               ['settings', 'Thresholds', Sliders],
               ['audit', 'Audit Logs', FileText],
               ['docs', 'SQL & Docs', FileText],
@@ -333,7 +615,55 @@ export const AdminGovernanceModule: React.FC<Props> = ({
 
       {tab === 'facilities' && (
         <div className="space-y-4">
-          <div className="flex justify-end">
+          <RegionalFacilityPerformanceCard facilities={facilities} hubData={hubData} onToast={onToast} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {isSuperAdmin && globalRecordsMode ? (
+              <div className="no-print flex flex-wrap items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                <span className="text-xs font-semibold text-amber-950">
+                  {selectedFacIds.length} Hospital(s) Selected
+                </span>
+                <select
+                  aria-label="Bulk facility status"
+                  value={bulkFacStatus}
+                  onChange={(e) => setBulkFacStatus(e.target.value as '' | Facility['status'])}
+                  className="px-2 py-1 text-xs border border-amber-300 rounded bg-white"
+                >
+                  <option value="">Status...</option>
+                  <option value="Approved">Approved</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Suspended">Suspended</option>
+                </select>
+                <select
+                  aria-label="Bulk facility district"
+                  value={bulkFacDistrict}
+                  onChange={(e) => setBulkFacDistrict(e.target.value)}
+                  className="px-2 py-1 text-xs border border-amber-300 rounded bg-white"
+                >
+                  <option value="">District...</option>
+                  {SIERRA_LEONE_DISTRICTS.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={selectedFacIds.length === 0}
+                  onClick={handleBulkModifyFacilities}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-slate-900 rounded hover:bg-slate-800 disabled:opacity-40"
+                >
+                  <Edit3 className="w-3 h-3" /> Bulk Modify
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedFacIds.length === 0}
+                  onClick={handleBulkDeleteFacilities}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-red-700 rounded hover:bg-red-800 disabled:opacity-40"
+                >
+                  <Trash2 className="w-3 h-3" /> Bulk Delete
+                </button>
+              </div>
+            ) : (
+              <div />
+            )}
             <button type="button" onClick={openNewFacility} className="no-print inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800">
               <Plus className="w-3.5 h-3.5" /> Register Hospital / Clinic
             </button>
@@ -391,6 +721,23 @@ export const AdminGovernanceModule: React.FC<Props> = ({
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
                 <tr>
+                  {isSuperAdmin && globalRecordsMode && (
+                    <th className="no-print py-2.5 px-4 w-10">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all facilities"
+                        checked={facilities.length > 0 && facilities.every((f) => selectedFacIds.includes(f.id))}
+                        onChange={() =>
+                          setSelectedFacIds(
+                            facilities.length > 0 && facilities.every((f) => selectedFacIds.includes(f.id))
+                              ? []
+                              : facilities.map((f) => f.id)
+                          )
+                        }
+                        className="rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                      />
+                    </th>
+                  )}
                   <th className="py-2.5 px-4 font-semibold">Code</th>
                   <th className="py-2.5 px-4 font-semibold">Facility</th>
                   <th className="py-2.5 px-4 font-semibold">District</th>
@@ -402,8 +749,24 @@ export const AdminGovernanceModule: React.FC<Props> = ({
               <tbody className="divide-y divide-slate-100">
                 {facilities.map((f) => {
                   const canEditFac = isSuperAdmin || (canManageFacilities && f.id === user.facilityId);
+                  const checked = selectedFacIds.includes(f.id);
                   return (
-                    <tr key={f.id} className="hover:bg-slate-50">
+                    <tr key={f.id} className={checked ? 'bg-amber-50/50' : 'hover:bg-slate-50'}>
+                      {isSuperAdmin && globalRecordsMode && (
+                        <td className="no-print py-2.5 px-4">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${f.name}`}
+                            checked={checked}
+                            onChange={() =>
+                              setSelectedFacIds((prev) =>
+                                prev.includes(f.id) ? prev.filter((id) => id !== f.id) : [...prev, f.id]
+                              )
+                            }
+                            className="rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                          />
+                        </td>
+                      )}
                       <td className="py-2.5 px-4 font-mono text-slate-700">{f.code}</td>
                       <td className="py-2.5 px-4">
                         <div className="font-semibold text-slate-900">{f.name}</div>
@@ -518,14 +881,74 @@ export const AdminGovernanceModule: React.FC<Props> = ({
           )}
 
           <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
-            <div className="px-5 py-3 border-b border-slate-200 text-xs text-slate-600">
-              {isSuperAdmin
-                ? 'Authenticated Platform Staff & 10-Role Access Control Matrix'
-                : `Hospital Staff Directory — ${user.facilityName || user.facilityId}`}
+            <div className="px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+              <span>
+                {isSuperAdmin
+                  ? 'Authenticated Platform Staff & 10-Role Access Control Matrix'
+                  : `Hospital Staff Directory — ${user.facilityName || user.facilityId}`}
+              </span>
+              {isSuperAdmin && globalRecordsMode && (
+                <div className="no-print flex flex-wrap items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                  <span className="font-semibold text-amber-950">{selectedStaffUids.length} Selected</span>
+                  <select
+                    aria-label="Bulk staff role"
+                    value={bulkStaffRole}
+                    onChange={(e) => setBulkStaffRole(e.target.value as '' | UserRole)}
+                    className="px-2 py-1 text-xs border border-amber-300 rounded bg-white"
+                  >
+                    <option value="">Role...</option>
+                    {USER_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                  <select
+                    aria-label="Bulk staff status"
+                    value={bulkStaffStatus}
+                    onChange={(e) => setBulkStaffStatus(e.target.value as '' | UserProfile['status'])}
+                    className="px-2 py-1 text-xs border border-amber-300 rounded bg-white"
+                  >
+                    <option value="">Status...</option>
+                    <option value="Active">Active</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Suspended">Suspended</option>
+                  </select>
+                  <button
+                    type="button"
+                    disabled={selectedStaffUids.length === 0}
+                    onClick={handleBulkModifyStaff}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-slate-900 rounded hover:bg-slate-800 disabled:opacity-40"
+                  >
+                    <Edit3 className="w-3 h-3" /> Bulk Modify
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectedStaffUids.length === 0}
+                    onClick={handleBulkDeleteStaff}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-red-700 rounded hover:bg-red-800 disabled:opacity-40"
+                  >
+                    <Trash2 className="w-3 h-3" /> Bulk Delete
+                  </button>
+                </div>
+              )}
             </div>
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
                 <tr>
+                  {isSuperAdmin && globalRecordsMode && (
+                    <th className="no-print py-2.5 px-4 w-10">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all staff accounts"
+                        checked={staffUsers.length > 0 && staffUsers.every((s) => selectedStaffUids.includes(s.uid))}
+                        onChange={() =>
+                          setSelectedStaffUids(
+                            staffUsers.length > 0 && staffUsers.every((s) => selectedStaffUids.includes(s.uid))
+                              ? []
+                              : staffUsers.map((s) => s.uid)
+                          )
+                        }
+                        className="rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                      />
+                    </th>
+                  )}
                   <th className="py-2.5 px-4 font-semibold">Staff Member</th>
                   <th className="py-2.5 px-4 font-semibold">Facility</th>
                   <th className="py-2.5 px-4 font-semibold">Current Role</th>
@@ -543,8 +966,24 @@ export const AdminGovernanceModule: React.FC<Props> = ({
                     s.uid !== user.uid &&
                     s.email !== 'jaahwix@gmail.com' &&
                     (isSuperAdmin || (s.facilityId === user.facilityId && s.role !== 'Super Administrator'));
+                  const checked = selectedStaffUids.includes(s.uid);
                   return (
-                    <tr key={s.uid}>
+                    <tr key={s.uid} className={checked ? 'bg-amber-50/50' : ''}>
+                      {isSuperAdmin && globalRecordsMode && (
+                        <td className="no-print py-2.5 px-4">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${s.displayName}`}
+                            checked={checked}
+                            onChange={() =>
+                              setSelectedStaffUids((prev) =>
+                                prev.includes(s.uid) ? prev.filter((id) => id !== s.uid) : [...prev, s.uid]
+                              )
+                            }
+                            className="rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                          />
+                        </td>
+                      )}
                       <td className="py-2.5 px-4">
                         <div className="font-semibold text-slate-900">{s.displayName}</div>
                         <div className="text-slate-500">{s.email}</div>
@@ -612,6 +1051,17 @@ export const AdminGovernanceModule: React.FC<Props> = ({
             </table>
           </div>
         </div>
+      )}
+
+      {tab === 'global-records' && isSuperAdmin && globalRecordsMode && hubData && (
+        <GlobalRecordsPanel
+          currentUser={user}
+          facilities={facilities}
+          hubData={hubData}
+          onRequireReauth={(req) => setReauthRequest(req)}
+          onLogAudit={onLogAudit}
+          onToast={onToast}
+        />
       )}
 
       {tab === 'settings' && (
@@ -803,6 +1253,10 @@ export const AdminGovernanceModule: React.FC<Props> = ({
           )}
         </div>
       )}
+      <ReauthActionModal
+        request={reauthRequest}
+        onClose={() => setReauthRequest(null)}
+      />
     </div>
   );
 };
